@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Bybit KYC Extension",
+  "version": "1.0.0",
+  "description": "Extension to generate Bybit KYC links quickly",
+  "action": {
+    "default_popup": "index.html"
+  },
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "*://*.bybit.com/*",
+    "*://*.bybitglobal.com/*",
+    "*://bybit.com/*",
+    "*://bybitglobal.com/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bybit.com/*",
+        "*://*.bybitglobal.com/*",
+        "*://bybit.com/*",
+        "*://bybitglobal.com/*"
+      ],
+      "js": ["src/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' http://localhost:5173; object-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 https://*; style-src 'self' 'unsafe-inline';"
+  }
+}
