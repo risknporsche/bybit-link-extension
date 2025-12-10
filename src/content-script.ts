@@ -1,6 +1,7 @@
 import {
   getVerificationSdkKysInfo,
   getKysInfo,
+  postAmlKycQuestionnaire,
   type BybitApiResp,
   type GetVerificationSdkKysInfo,
   type GetVerificationSdkKysInfoPayload,
@@ -49,6 +50,7 @@ const handleGetKycLink = async (
   payload?: GetVerificationSdkKysInfoPayload,
 ): Promise<ContentScriptResponse<BybitApiResp<GetVerificationSdkKysInfo>>> => {
   try {
+    await postAmlKycQuestionnaire(1, 'UY');
     const data = await getVerificationSdkKysInfo(payload ?? defaultPayload);
     return { ok: true, data };
   } catch (error) {
