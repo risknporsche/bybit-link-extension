@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bybit KYC Extension",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Extension to generate Bybit KYC links quickly",
   "action": {
     "default_popup": "index.html"
