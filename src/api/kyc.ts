@@ -231,6 +231,60 @@ export enum ByBitAwardStatus {
   AWARDING_STATUS_UNKNOWN = 'AWARDING_STATUS_UNKNOWN',
 }
 
+export type RewardEntity = {
+  awardId: number;
+  specCode: string;
+  awardTitle: string;
+  type: string;
+  status: string;
+  statusText?: string;
+  claimWithinSec?: number;
+  expiresAt?: string;
+  amountText: string;
+};
+
+type RewardFaceCacheEntry = {
+  riskToken: string;
+  faceToken?: string;
+  ticket?: string;
+  bizId?: string;
+  faceUrl?: string;
+  sumSubFetchedAt: string;
+};
+
+type RewardFaceCache = Record<string, RewardFaceCacheEntry>;
+
+export type ClaimRewardResult =
+  | {
+      status: 'claimed';
+      retCode: number;
+    }
+  | {
+      status: 'face_required';
+      faceToken: string;
+      riskToken: string;
+      faceUrl?: string;
+      ticket?: string;
+      bizId?: string;
+    };
+
+export interface Get2fa {
+  secret: string;
+  qrcode_src: string;
+  ret_code?: number;
+}
+
+export interface FaceTokenResponse {
+  biz_id: string;
+  ticket: string;
+  provider: string;
+  token_info: {
+    token: string;
+    jumio_url: string;
+    url: string;
+  };
+}
+
 export const getVerificationSdkKysInfo = async (
   payload: GetVerificationSdkKysInfoPayload,
 ) => {
@@ -332,10 +386,10 @@ export const postAmlKycQuestionnaire = (templateCode: any, content: string) => {
     });
 };
 
-export const getRewardList = async () => {
+export const getRewardList = async (): Promise<RewardEntity[]> => {
   const rewardInfoList = await axios
     .post<BybitApiResp<RewardInfoList>>(
-      `/segw/awar/v1/awarding/search-together`,
+      `/x-api/segw/awar/v1/awarding/search-together`,
       {
         pagination: {
           pageNum: 1,
@@ -363,6 +417,10 @@ export const getRewardList = async () => {
     });
 
   return rewardInfoList.awardings.map((reward) => {
+    const amountText =
+      reward.award_detail.award_text ||
+      `${reward.award_detail.award_value} ${reward.award_detail.coin}`.trim();
+
     return {
       awardId: reward.award_detail.id,
       specCode: reward.spec_code,
@@ -370,6 +428,230 @@ export const getRewardList = async () => {
       type: reward.award_detail.award_type,
       status:
         reward.awarding_status || ByBitAwardStatus.AWARDING_STATUS_UNKNOWN,
+      statusText: reward.awarding_status_text,
+      claimWithinSec: Number.parseInt(reward.remain_sec, 10),
+      expiresAt: reward.ineffective_at,
+      amountText,
     };
   });
+};
+
+export const apiClaimReward = (awardID: number, spec_code: string, args = {}) => {
+  return axios
+    .post<BybitApiResp<{ risk_token: string }>>(`/x-api/segw/awar/v1/awarding`, {
+      awardID: awardID,
+      spec_code: spec_code,
+      is_reward_hub: true,
+      ...args,
+    })
+    .then(({ data }) => {
+      if (data.ret_code === 0 || data.ret_code === 409015) {
+        return data;
+      }
+
+      throw new Error(`Error claim awarding: ${JSON.stringify(data)}`);
+    });
+}
+
+export const verifyRiskCode = (
+  component_list: Record<string, string>,
+  risk_token: string,
+  args = {}
+) => {
+  return axios
+    .post<BybitApiResp<Get2fa>>(`/x-api/user/public/risk/verify`, {
+      risk_token,
+      component_list,
+      ...args,
+    })
+    .then(({ data }) => {
+      if (data.ret_code === 0) {
+        return data;
+      }
+
+      throw new Error(`Error verify risk code: ${JSON.stringify(data)}`);
+    });
+}
+
+export const getSumSubFaceToken = (risk_token: string) => {
+  return axios
+    .post<BybitApiResp<FaceTokenResponse>>(`/x-api/user/public/risk/face/token`, {
+      risk_token,
+    })
+    .then(({ data }) => {
+      if (data.ret_code === 0) {
+        return data;
+      }
+
+      throw new Error(
+        `Error get sum sub face token: ${JSON.stringify(data)}`
+      );
+    });
+}
+
+const REWARD_FACE_CACHE_KEY = 'BYBIT_REWARD_FACE_CACHE';
+
+const getRewardFaceCache = (): RewardFaceCache => {
+  if (typeof localStorage === 'undefined') {
+    return {};
+  }
+
+  const raw = localStorage.getItem(REWARD_FACE_CACHE_KEY);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as RewardFaceCache;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const persistRewardFaceCache = (cache: RewardFaceCache) => {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+
+  try {
+    localStorage.setItem(REWARD_FACE_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // ignore persistence errors
+  }
+};
+
+const buildRewardCacheKey = (awardId: number, specCode: string) =>
+  `${awardId}:${specCode}`;
+
+const isCacheEntryFresh = (cachedAt?: string) => {
+  if (!cachedAt) return false;
+  const timestamp = new Date(cachedAt).getTime();
+  if (Number.isNaN(timestamp)) {
+    return false;
+  }
+  const twentyMinutesMs = 20 * 60 * 1000;
+  return Date.now() - timestamp <= twentyMinutesMs;
+};
+
+const ensureFaceToken = async (
+  cacheKey: string,
+  cache: RewardFaceCache,
+): Promise<RewardFaceCacheEntry> => {
+  const entry = cache[cacheKey];
+  if (!entry?.riskToken) {
+    throw new Error('Missing risk token');
+  }
+
+  if (entry.faceToken) {
+    return entry;
+  }
+
+  const faceTokenResponse = await getSumSubFaceToken(entry.riskToken);
+  const tokenInfo = faceTokenResponse.result?.token_info;
+  const faceToken = tokenInfo?.token;
+
+  if (!faceToken) {
+    throw new Error(
+      `Cannot fetch face token: ${JSON.stringify(faceTokenResponse)}`,
+    );
+  }
+
+  cache[cacheKey] = {
+    ...entry,
+    faceToken,
+    faceUrl: tokenInfo?.url ?? tokenInfo?.jumio_url,
+    ticket: faceTokenResponse.result?.ticket ?? entry.ticket,
+    bizId: faceTokenResponse.result?.biz_id ?? entry.bizId,
+    sumSubFetchedAt: new Date().toISOString(),
+  };
+
+  persistRewardFaceCache(cache);
+  return cache[cacheKey];
+};
+
+export const claimReward = async (
+  awardId: number,
+  spec_code: string,
+): Promise<ClaimRewardResult> => {
+  const cache = getRewardFaceCache();
+  const cacheKey = buildRewardCacheKey(awardId, spec_code);
+  const cachedEntry = cache[cacheKey];
+
+  if (
+    cachedEntry?.riskToken &&
+    cachedEntry.ticket &&
+    cachedEntry.bizId &&
+    isCacheEntryFresh(cachedEntry.sumSubFetchedAt)
+  ) {
+    const ensuredEntry = await ensureFaceToken(cacheKey, cache);
+
+    const verifyResponse = await verifyRiskCode(
+      {
+        kyc_verify: 'kyc_verify',
+      },
+      ensuredEntry.riskToken,
+      {
+        biz_id: ensuredEntry.bizId,
+        ticket: ensuredEntry.ticket,
+      },
+    );
+
+    if (verifyResponse.result.ret_code === 0) {
+      const claimResponse = await apiClaimReward(awardId, spec_code, {
+        face_token: ensuredEntry.faceToken,
+      });
+
+      delete cache[cacheKey];
+      persistRewardFaceCache(cache);
+
+    return {
+        status: 'claimed',
+        retCode: claimResponse.ret_code,
+      };
+    }
+  }
+
+    const response = await apiClaimReward(awardId, spec_code);
+
+    if (response.ret_code === 409015) {
+    const riskToken = response.result.risk_token;
+    const faceTokenResponse = await getSumSubFaceToken(riskToken);
+    const tokenInfo = faceTokenResponse.result?.token_info;
+    const faceToken = tokenInfo?.token;
+
+      if (!faceToken) {
+        throw new Error(
+        `Cannot fetch face token: ${JSON.stringify(faceTokenResponse)}`,
+        );
+      }
+
+    cache[cacheKey] = {
+      riskToken,
+      faceToken,
+      ticket: faceTokenResponse.result?.ticket,
+      bizId: faceTokenResponse.result?.biz_id,
+      faceUrl: tokenInfo?.url ?? tokenInfo?.jumio_url,
+      sumSubFetchedAt: new Date().toISOString(),
+    };
+
+    persistRewardFaceCache(cache);
+
+    return {
+      status: 'face_required',
+      faceToken,
+      riskToken,
+      faceUrl: cache[cacheKey].faceUrl,
+      ticket: cache[cacheKey].ticket,
+      bizId: cache[cacheKey].bizId,
+    };
+  }
+
+  delete cache[cacheKey];
+  persistRewardFaceCache(cache);
+
+  return {
+    status: 'claimed',
+    retCode: response.ret_code,
+  };
 };

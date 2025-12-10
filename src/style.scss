@@ -304,6 +304,52 @@ p {
   justify-content: flex-end;
 }
 
+.reward-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.reward-card {
+  gap: 8px;
+  padding: 10px;
+}
+
+.reward-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reward-title {
+  font-size: 15px;
+}
+
+.reward-amount {
+  font-weight: 700;
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+.reward-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.reward-actions {
+  justify-content: flex-end;
+}
+
+.btn.compact {
+  padding: 8px 12px;
+  font-size: 12px;
+  min-width: auto;
+}
+
 .btn {
   border: none;
   border-radius: 12px;
