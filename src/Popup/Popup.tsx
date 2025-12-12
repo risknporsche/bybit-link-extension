@@ -180,18 +180,6 @@ const readStoredFaceVerification = (): FaceVerificationState | null => {
       return null;
     }
 
-    const fetchedAtTs = new Date(parsed.fetchedAt).getTime();
-    const isFresh =
-      !Number.isNaN(fetchedAtTs) &&
-      Date.now() - fetchedAtTs <= FACE_VERIFICATION_TTL_MS;
-
-    if (!isFresh) {
-      localStorage.removeItem(FACE_VERIFICATION_STORAGE_KEY);
-      localStorage.removeItem('lastRewardFaceToken');
-      localStorage.removeItem('lastRewardFaceTokenFetchedAt');
-      return null;
-    }
-
     return {
       awardId: parsed.awardId,
       faceToken: parsed.faceToken,
@@ -688,9 +676,6 @@ export const Popup = () => {
       const msLeft = expiresAt - Date.now();
       const clamped = msLeft > 0 ? msLeft : 0;
       setFaceRemainingMs(clamped);
-      if (msLeft <= 0) {
-        persistFaceVerification(null);
-      }
     };
 
     updateRemaining();
@@ -698,6 +683,35 @@ export const Popup = () => {
 
     return () => clearInterval(timer);
   }, [faceVerification?.fetchedAt]);
+
+  const isFaceVerificationExpired =
+    faceRemainingMs !== null && faceRemainingMs <= 0;
+
+  useEffect(() => {
+    if (!faceVerification?.url || isFaceVerificationExpired) {
+      return;
+    }
+
+    try {
+      const faceUrl = new URL(faceVerification.url);
+      const currentLang = faceUrl.searchParams.get('lang');
+
+      if (currentLang === language) {
+        return;
+      }
+
+      faceUrl.searchParams.set('lang', language);
+      const updatedUrl = faceUrl.toString();
+      const updatedState: FaceVerificationState = {
+        ...faceVerification,
+        url: updatedUrl,
+      };
+      setFaceVerification(updatedState);
+      persistFaceVerification(updatedState);
+    } catch {
+      // ignore malformed url
+    }
+  }, [faceVerification, isFaceVerificationExpired, language]);
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -727,7 +741,7 @@ export const Popup = () => {
 
   const handleCopyFaceLink = useCallback(async () => {
     if (!faceVerification) return;
-    const isExpired = faceRemainingMs !== null && faceRemainingMs <= 0;
+    const isExpired = isFaceVerificationExpired;
     const value = faceVerification.url;
     if (!value || isExpired) return;
 
@@ -742,10 +756,10 @@ export const Popup = () => {
   }, [faceVerification]);
 
   const handleOpenFaceLink = useCallback(() => {
-    const isExpired = faceRemainingMs !== null && faceRemainingMs <= 0;
+    const isExpired = isFaceVerificationExpired;
     if (!faceVerification?.url || isExpired) return;
     window.open(faceVerification.url, '_blank', 'noopener,noreferrer');
-  }, [faceRemainingMs, faceVerification]);
+  }, [isFaceVerificationExpired, faceVerification]);
 
   const formattedRewardsFetchedAt = useMemo(() => {
     if (!rewardsFetchedAt) return 'Not checked yet';
@@ -772,9 +786,6 @@ export const Popup = () => {
     const seconds = (totalSeconds % 60).toString().padStart(2, '0');
     return `${minutes}:${seconds}`;
   }, [remainingMs]);
-
-  const isFaceVerificationExpired =
-    faceRemainingMs !== null && faceRemainingMs <= 0;
 
   const faceFormattedRemaining = useMemo(() => {
     if (!faceRemainingMs && faceRemainingMs !== 0) return null;
@@ -954,7 +965,7 @@ export const Popup = () => {
               onClick={handleOpenLink}
               disabled={!link || isLinkExpired}
             >
-              Get link
+              Open link
             </button>
           </div>
 
@@ -1139,6 +1150,25 @@ export const Popup = () => {
               <p className="muted-text">
                 Complete face verification to finish claiming award {faceVerification.awardId}.
               </p>
+
+              <div className="option-row">
+                <div className="option-head">
+                  <span className="option-label">Language for face link</span>
+                  <span className="muted-text">Saved for next time</span>
+                </div>
+                <select
+                  id="face-language"
+                  className="text-input"
+                  value={language}
+                  onChange={handleLanguageChange}
+                >
+                  {languageOptions.map(({ code, label }) => (
+                    <option key={code} value={code}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               <div className="input-row">
                 <input
