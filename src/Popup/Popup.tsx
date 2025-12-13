@@ -825,9 +825,7 @@ export const Popup = () => {
 
   const unclaimedRewards = useMemo(
     () =>
-      rewards.filter(
-        (reward) => reward.status === 'AWARDING_STATUS_UNCLAIMED',
-      ).length,
+      rewards.filter((reward) => reward.statusText === "Claim"),
     [rewards],
   );
 
@@ -1089,7 +1087,7 @@ export const Popup = () => {
                 {isLoadingRewards
                   ? 'Fetching rewards...'
                   : rewards.length
-                    ? `${rewards.length} found`
+                    ? ``
                     : hasFetchedRewards
                       ? 'Awardings list is empty'
                       : 'No rewards fetched yet'}
@@ -1099,7 +1097,7 @@ export const Popup = () => {
 
             <div className="reward-summary">
               <span className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}>
-                Found {unclaimedRewards} unclaimed reward(s)
+                Found {unclaimedRewards.length} unclaimed reward(s)
               </span>
               <button
                 className="btn secondary"
@@ -1148,7 +1146,7 @@ export const Popup = () => {
               </div>
 
               <p className="muted-text">
-                Complete face verification to finish claiming award {faceVerification.awardId}.
+                Complete face verification to finish claiming award.
               </p>
 
               <div className="option-row">
@@ -1213,19 +1211,16 @@ export const Popup = () => {
             </section>
           ) : null}
 
-          {rewards.map((reward) => (
+          {unclaimedRewards.map((reward) => (
             <section className="card reward-card" key={`${reward.awardId}-${reward.specCode}`}>
               <div className="card-top">
-                <div className="card-title reward-title">{reward.awardTitle}</div>
+                <div className="card-title reward-title">{reward.awardTitle || reward.amountText}</div>
                 <span className="pill pill-warning">
                   {reward.statusText || reward.status}
                 </span>
               </div>
 
               <div className="reward-body">
-                {reward.awardTitle.trim().toLowerCase() !== reward.amountText.trim().toLowerCase() ? (
-                  <div className="reward-amount">{reward.amountText}</div>
-                ) : null}
                 <div className="reward-meta">
                   <span className="meta-label">
                     Expires at {formatSeconds(reward.claimWithinSec)}
@@ -1244,7 +1239,7 @@ export const Popup = () => {
                     claimingRewardId === reward.awardId
                   }
                 >
-                  {claimingRewardId === reward.awardId ? 'Claiming...' : 'Claim'}
+                  {claimingRewardId === reward.awardId ? 'Claiming...' : faceVerification?.awardId === reward.awardId ? 'Verified? Claim' : 'Claim'}
                 </button>
               </div>
             </section>
