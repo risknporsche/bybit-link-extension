@@ -532,16 +532,6 @@ const persistRewardFaceCache = (cache: RewardFaceCache) => {
 const buildRewardCacheKey = (awardId: number, specCode: string) =>
   `${awardId}:${specCode}`;
 
-const isCacheEntryFresh = (cachedAt?: string) => {
-  if (!cachedAt) return false;
-  const timestamp = new Date(cachedAt).getTime();
-  if (Number.isNaN(timestamp)) {
-    return false;
-  }
-  const twentyMinutesMs = 20 * 60 * 1000;
-  return Date.now() - timestamp <= twentyMinutesMs;
-};
-
 const ensureFaceToken = async (
   cacheKey: string,
   cache: RewardFaceCache,
@@ -662,23 +652,3 @@ export const claimReward = async (
     retCode: response.ret_code,
   };
 };
-
-}
-
-export const postAmlKycQuestionnaire = (templateCode: any, content: string)=> {
-  return axios
-    .post<BybitApiResp<any>>(`/x-api/v3/private/kyc/submit-questionnaire`, {
-      biz_from: 'kyc_web',
-      template_code: templateCode,
-      content: content,
-    })
-    .then(({ data }) => {
-      if (data.ret_code === 0 || data.ret_code === 1032) {
-        return data;
-      }
-
-      throw new Error(
-        `Error post AML Kyc Questionnaire: ${JSON.stringify(data)}`
-      );
-    });
-}
