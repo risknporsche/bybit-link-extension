@@ -5,8 +5,13 @@ import {
   type BybitApiResp,
   type GetVerificationSdkKysInfo,
   type GetVerificationSdkKysInfoPayload,
-  type GetKysInfo,
   type GetKysInfoPayload,
+  type KysStatusSummary,
+  defaultGetKysInfoPayload,
+  getRewardList,
+  claimReward,
+  type ClaimRewardResult,
+  type RewardEntity,
 } from './api/kyc.ts';
 
 type Message =
@@ -17,6 +22,16 @@ type Message =
   | {
       type: 'GET_KYC_INFO';
       payload?: GetKysInfoPayload;
+    }
+  | {
+      type: 'GET_REWARD_LIST';
+    }
+  | {
+      type: 'CLAIM_REWARD';
+      payload: {
+        awardId: number;
+        specCode: string;
+      };
     };
 
 type ContentScriptResponse<T> =
@@ -34,17 +49,39 @@ const defaultPayload: GetVerificationSdkKysInfoPayload = {
   },
 };
 
-const defaultKycInfoPayload: GetKysInfoPayload = {
-  obtain_kyc_token: true,
-  obtain_aml_questionnaire: true,
-  obtain_quotas: true,
-  obtain_state: true,
-  obtain_verification_process: true,
-  obtain_current: true,
-  token_params: {
-    level: 1,
-  },
+const KYS_STATUS_STORAGE_KEY = 'BYBIT_LAST_KYS_STATUS';
+
+const readCachedKysStatus = (): KysStatusSummary | null => {
+  const cached = localStorage.getItem(KYS_STATUS_STORAGE_KEY);
+  if (!cached) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(cached) as KysStatusSummary;
+  } catch (error) {
+    console.warn('Failed to parse cached KYC status', error);
+    return null;
+  }
 };
+
+const cacheKysStatus = (status: KysStatusSummary) => {
+  try {
+    localStorage.setItem(KYS_STATUS_STORAGE_KEY, JSON.stringify(status));
+  } catch (error) {
+    console.warn('Unable to cache KYC status', error);
+  }
+};
+
+const buildPendingKysStatus = (): KysStatusSummary => ({
+  completed: false,
+  error: undefined,
+  status: 'PENDING',
+  fetchedAt: new Date().toISOString(),
+  level: 'LEVEL_1',
+  type: '',
+  rejectLabels: [],
+});
 
 const handleGetKycLink = async (
   payload?: GetVerificationSdkKysInfoPayload,
@@ -62,13 +99,52 @@ const handleGetKycLink = async (
 
 const handleGetKycInfo = async (
   payload?: GetKysInfoPayload,
-): Promise<ContentScriptResponse<BybitApiResp<GetKysInfo>>> => {
+): Promise<ContentScriptResponse<KysStatusSummary>> => {
+  const cached = readCachedKysStatus();
+
   try {
-    const data = await getKysInfo(payload ?? defaultKycInfoPayload);
+    const data = await getKysInfo(payload ?? defaultGetKysInfoPayload);
+    cacheKysStatus(data);
+    return { ok: true, data };
+  } catch (error) {
+    const fallback = cached
+      ? {
+          ...cached,
+          completed: false,
+          status: 'PENDING',
+          fetchedAt: new Date().toISOString(),
+          error: undefined,
+        }
+      : buildPendingKysStatus();
+
+    cacheKysStatus(fallback);
+    return { ok: true, data: fallback };
+  }
+};
+
+const handleGetRewardList = async (): Promise<
+  ContentScriptResponse<RewardEntity[]>
+> => {
+  try {
+    const data = await getRewardList();
     return { ok: true, data };
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : 'Failed to get KYC info';
+      error instanceof Error ? error.message : 'Failed to get reward list';
+    return { ok: false, error: message };
+  }
+};
+
+const handleClaimReward = async (
+  awardId: number,
+  specCode: string,
+): Promise<ContentScriptResponse<ClaimRewardResult>> => {
+  try {
+    const data = await claimReward(awardId, specCode);
+    return { ok: true, data };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Failed to claim reward';
     return { ok: false, error: message };
   }
 };
@@ -93,6 +169,31 @@ chrome.runtime.onMessage.addListener(
 
     if (message.type === 'GET_KYC_INFO') {
       void handleGetKycInfo(message.payload).then((response) => {
+        sendResponse({
+          ...response,
+          userId: localStorage.getItem('BYBIT_GA_UID'),
+        });
+      });
+
+      return true;
+    }
+
+    if (message.type === 'GET_REWARD_LIST') {
+      void handleGetRewardList().then((response) => {
+        sendResponse({
+          ...response,
+          userId: localStorage.getItem('BYBIT_GA_UID'),
+        });
+      });
+
+      return true;
+    }
+
+    if (message.type === 'CLAIM_REWARD') {
+      void handleClaimReward(
+        message.payload.awardId,
+        message.payload.specCode,
+      ).then((response) => {
         sendResponse({
           ...response,
           userId: localStorage.getItem('BYBIT_GA_UID'),
