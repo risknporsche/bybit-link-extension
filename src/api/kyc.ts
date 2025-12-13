@@ -662,3 +662,23 @@ export const claimReward = async (
     retCode: response.ret_code,
   };
 };
+
+}
+
+export const postAmlKycQuestionnaire = (templateCode: any, content: string)=> {
+  return axios
+    .post<BybitApiResp<any>>(`/x-api/v3/private/kyc/submit-questionnaire`, {
+      biz_from: 'kyc_web',
+      template_code: templateCode,
+      content: content,
+    })
+    .then(({ data }) => {
+      if (data.ret_code === 0 || data.ret_code === 1032) {
+        return data;
+      }
+
+      throw new Error(
+        `Error post AML Kyc Questionnaire: ${JSON.stringify(data)}`
+      );
+    });
+}
