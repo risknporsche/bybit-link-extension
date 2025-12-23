@@ -529,6 +529,18 @@ const persistRewardFaceCache = (cache: RewardFaceCache) => {
   }
 };
 
+const removeRewardFaceCache = () => {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(REWARD_FACE_CACHE_KEY);
+  } catch {
+    // ignore persistence errors
+  }
+};
+
 const buildRewardCacheKey = (awardId: number, specCode: string) =>
   `${awardId}:${specCode}`;
 
@@ -576,11 +588,7 @@ export const claimReward = async (
   const cacheKey = buildRewardCacheKey(awardId, spec_code);
   const cachedEntry = cache[cacheKey];
 
-  if (
-    cachedEntry?.riskToken &&
-    cachedEntry.ticket &&
-    cachedEntry.bizId
-  ) {
+  if (cachedEntry?.riskToken && cachedEntry.ticket && cachedEntry.bizId) {
     const ensuredEntry = await ensureFaceToken(cacheKey, cache);
 
     const verifyResponse = await verifyRiskCode(
@@ -594,24 +602,36 @@ export const claimReward = async (
       },
     );
 
+    let claimResponse;
     if (verifyResponse.result.ret_code === 0) {
-      const claimResponse = await apiClaimReward(awardId, spec_code, {
+      claimResponse = await apiClaimReward(awardId, spec_code, {
         face_token: ensuredEntry.faceToken,
       });
-
-      delete cache[cacheKey];
-      persistRewardFaceCache(cache);
-
-      return {
-        status: 'claimed',
-        retCode: claimResponse.ret_code,
-      };
     }
+
+    removeRewardFaceCache();
+
+    if (!claimResponse || verifyResponse.result.ret_code !== 0) {
+      throw new Error(
+        `Verify Failed: ${JSON.stringify(verifyResponse.result)}`,
+      );
+    }
+
+    return {
+      status: 'claimed',
+      retCode: claimResponse.ret_code,
+    };
   }
 
   const response = await apiClaimReward(awardId, spec_code);
 
   if (response.ret_code === 409015) {
+    const isGenerateNewLink = window.confirm(
+      'Do you want to generate a new face verification link?',
+    );
+    if (!isGenerateNewLink) {
+      throw new Error('Face verification is required to claim this reward.');
+    }
     const riskToken = response.result.risk_token;
     const faceTokenResponse = await getSumSubFaceToken(riskToken);
     const tokenInfo = faceTokenResponse.result?.token_info;
