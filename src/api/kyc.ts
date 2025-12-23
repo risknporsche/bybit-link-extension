@@ -456,6 +456,7 @@ export const apiClaimReward = (
         return data;
       }
 
+      removeRewardFaceCache();
       throw new Error(`Error claim awarding: ${JSON.stringify(data)}`);
     });
 };
@@ -476,6 +477,7 @@ export const verifyRiskCode = (
         return data;
       }
 
+      removeRewardFaceCache();
       throw new Error(`Error verify risk code: ${JSON.stringify(data)}`);
     });
 };
@@ -544,42 +546,6 @@ const removeRewardFaceCache = () => {
 const buildRewardCacheKey = (awardId: number, specCode: string) =>
   `${awardId}:${specCode}`;
 
-const ensureFaceToken = async (
-  cacheKey: string,
-  cache: RewardFaceCache,
-): Promise<RewardFaceCacheEntry> => {
-  const entry = cache[cacheKey];
-  if (!entry?.riskToken) {
-    throw new Error('Missing risk token');
-  }
-
-  if (entry.faceToken) {
-    return entry;
-  }
-
-  const faceTokenResponse = await getSumSubFaceToken(entry.riskToken);
-  const tokenInfo = faceTokenResponse.result?.token_info;
-  const faceToken = tokenInfo?.token;
-
-  if (!faceToken) {
-    throw new Error(
-      `Cannot fetch face token: ${JSON.stringify(faceTokenResponse)}`,
-    );
-  }
-
-  cache[cacheKey] = {
-    ...entry,
-    faceToken,
-    faceUrl: tokenInfo?.url ?? tokenInfo?.jumio_url,
-    ticket: faceTokenResponse.result?.ticket ?? entry.ticket,
-    bizId: faceTokenResponse.result?.biz_id ?? entry.bizId,
-    sumSubFetchedAt: new Date().toISOString(),
-  };
-
-  persistRewardFaceCache(cache);
-  return cache[cacheKey];
-};
-
 export const claimReward = async (
   awardId: number,
   spec_code: string,
@@ -589,23 +555,21 @@ export const claimReward = async (
   const cachedEntry = cache[cacheKey];
 
   if (cachedEntry?.riskToken && cachedEntry.ticket && cachedEntry.bizId) {
-    const ensuredEntry = await ensureFaceToken(cacheKey, cache);
-
     const verifyResponse = await verifyRiskCode(
       {
         kyc_verify: 'kyc_verify',
       },
-      ensuredEntry.riskToken,
+      cachedEntry.riskToken,
       {
-        biz_id: ensuredEntry.bizId,
-        ticket: ensuredEntry.ticket,
+        biz_id: cachedEntry.bizId,
+        ticket: cachedEntry.ticket,
       },
     );
 
     let claimResponse;
     if (verifyResponse.result.ret_code === 0) {
       claimResponse = await apiClaimReward(awardId, spec_code, {
-        face_token: ensuredEntry.faceToken,
+        face_token: cachedEntry.faceToken,
       });
     }
 
