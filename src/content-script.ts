@@ -13,6 +13,7 @@ import {
   type ClaimRewardResult,
   type RewardEntity,
 } from './api/kyc.ts';
+import { storageGet, storageSet } from './utils/chromeStorage.ts';
 
 type Message =
   | {
@@ -49,25 +50,21 @@ const defaultPayload: GetVerificationSdkKysInfoPayload = {
   },
 };
 
-const KYS_STATUS_STORAGE_KEY = 'BYBIT_LAST_KYS_STATUS';
+const KYS_STATUS_STORAGE_KEY = 'lastKysStatus';
 
-const readCachedKysStatus = (): KysStatusSummary | null => {
-  const cached = localStorage.getItem(KYS_STATUS_STORAGE_KEY);
-  if (!cached) {
-    return null;
-  }
-
+const readCachedKysStatus = async (): Promise<KysStatusSummary | null> => {
   try {
-    return JSON.parse(cached) as KysStatusSummary;
+    const cached = await storageGet<KysStatusSummary>(KYS_STATUS_STORAGE_KEY);
+    return cached && typeof cached === 'object' ? cached : null;
   } catch (error) {
-    console.warn('Failed to parse cached KYC status', error);
+    console.warn('Failed to read cached KYC status', error);
     return null;
   }
 };
 
-const cacheKysStatus = (status: KysStatusSummary) => {
+const cacheKysStatus = async (status: KysStatusSummary) => {
   try {
-    localStorage.setItem(KYS_STATUS_STORAGE_KEY, JSON.stringify(status));
+    await storageSet(KYS_STATUS_STORAGE_KEY, status);
   } catch (error) {
     console.warn('Unable to cache KYC status', error);
   }
@@ -88,6 +85,16 @@ const handleGetKycLink = async (
 ): Promise<ContentScriptResponse<BybitApiResp<GetVerificationSdkKysInfo>>> => {
   try {
     await postAmlKycQuestionnaire(1, 'UY');
+
+    await getKysInfo({
+      obtain_aml_questionnaire: true,
+      obtain_current: true,
+      obtain_kyc_token: false,
+      obtain_quotas: true,
+      obtain_state: true,
+      obtain_verification_process: true,
+    });
+
     const data = await getVerificationSdkKysInfo(payload ?? defaultPayload);
     return { ok: true, data };
   } catch (error) {
@@ -100,11 +107,11 @@ const handleGetKycLink = async (
 const handleGetKycInfo = async (
   payload?: GetKysInfoPayload,
 ): Promise<ContentScriptResponse<KysStatusSummary>> => {
-  const cached = readCachedKysStatus();
+  const cached = await readCachedKysStatus();
 
   try {
     const data = await getKysInfo(payload ?? defaultGetKysInfoPayload);
-    cacheKysStatus(data);
+    await cacheKysStatus(data);
     return { ok: true, data };
   } catch (error) {
     const fallback = cached
@@ -117,7 +124,7 @@ const handleGetKycInfo = async (
         }
       : buildPendingKysStatus();
 
-    cacheKysStatus(fallback);
+    await cacheKysStatus(fallback);
     return { ok: true, data: fallback };
   }
 };

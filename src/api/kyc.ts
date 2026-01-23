@@ -1,4 +1,10 @@
 import axios from 'axios';
+import {
+  storageGet,
+  storageRemove,
+  storageSet,
+} from '../utils/chromeStorage.ts';
+import { getRandomAddressFromCountry } from './address.ts';
 
 export interface BybitApiResp<T> {
   ret_code: number;
@@ -38,6 +44,7 @@ export type GetVerificationSdkKysInfoPayload = {
 };
 
 export interface GetKysInfo {
+  residenceCountry: string;
   kycToken: string;
   errorNotify: string;
   amlQuestionnaire: { needQuestionnaire: boolean; templateCode: string };
@@ -356,6 +363,14 @@ export const getKysInfo = async (
       return level === 'LEVEL_1';
     }) ?? null;
 
+
+  if (stateLvl1?.status === 'PENDING') {
+    const address = await getRandomAddressFromCountry(result.residenceCountry);
+
+    const content = `{"nationality":"${result.residenceCountry}","country":"${result.residenceCountry}","state":"${address.state}","postCode":"${address.postCode}","street":"${address.street}"}`;
+    await postAmlKycQuestionnaire(11, content);
+  }
+
   return {
     completed: retCode === 0 && stateLvl1?.status === 'SUCCESS',
     error: retCode === 0 ? errorNotify : (retMsg ?? 'KYC not completed'),
@@ -456,7 +471,7 @@ export const apiClaimReward = (
         return data;
       }
 
-      removeRewardFaceCache();
+      void removeRewardFaceCache();
       throw new Error(`Error claim awarding: ${JSON.stringify(data)}`);
     });
 };
@@ -477,7 +492,7 @@ export const verifyRiskCode = (
         return data;
       }
 
-      removeRewardFaceCache();
+      void removeRewardFaceCache();
       throw new Error(`Error verify risk code: ${JSON.stringify(data)}`);
     });
 };
@@ -501,43 +516,26 @@ export const getSumSubFaceToken = (risk_token: string) => {
 
 const REWARD_FACE_CACHE_KEY = 'BYBIT_REWARD_FACE_CACHE';
 
-const getRewardFaceCache = (): RewardFaceCache => {
-  if (typeof localStorage === 'undefined') {
-    return {};
-  }
-
-  const raw = localStorage.getItem(REWARD_FACE_CACHE_KEY);
-  if (!raw) {
-    return {};
-  }
-
+const getRewardFaceCache = async (): Promise<RewardFaceCache> => {
   try {
-    const parsed = JSON.parse(raw) as RewardFaceCache;
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const cached = await storageGet<RewardFaceCache>(REWARD_FACE_CACHE_KEY);
+    return cached && typeof cached === 'object' ? cached : {};
   } catch {
     return {};
   }
 };
 
-const persistRewardFaceCache = (cache: RewardFaceCache) => {
-  if (typeof localStorage === 'undefined') {
-    return;
-  }
-
+const persistRewardFaceCache = async (cache: RewardFaceCache) => {
   try {
-    localStorage.setItem(REWARD_FACE_CACHE_KEY, JSON.stringify(cache));
+    await storageSet(REWARD_FACE_CACHE_KEY, cache);
   } catch {
     // ignore persistence errors
   }
 };
 
-const removeRewardFaceCache = () => {
-  if (typeof localStorage === 'undefined') {
-    return;
-  }
-
+const removeRewardFaceCache = async () => {
   try {
-    localStorage.removeItem(REWARD_FACE_CACHE_KEY);
+    await storageRemove(REWARD_FACE_CACHE_KEY);
   } catch {
     // ignore persistence errors
   }
@@ -550,7 +548,7 @@ export const claimReward = async (
   awardId: number,
   spec_code: string,
 ): Promise<ClaimRewardResult> => {
-  const cache = getRewardFaceCache();
+  const cache = await getRewardFaceCache();
   const cacheKey = buildRewardCacheKey(awardId, spec_code);
   const cachedEntry = cache[cacheKey];
 
@@ -573,7 +571,7 @@ export const claimReward = async (
       });
     }
 
-    removeRewardFaceCache();
+    await removeRewardFaceCache();
 
     if (!claimResponse || verifyResponse.result.ret_code !== 0) {
       throw new Error(
@@ -616,7 +614,7 @@ export const claimReward = async (
       sumSubFetchedAt: new Date().toISOString(),
     };
 
-    persistRewardFaceCache(cache);
+    await persistRewardFaceCache(cache);
 
     return {
       status: 'face_required',
@@ -629,7 +627,7 @@ export const claimReward = async (
   }
 
   delete cache[cacheKey];
-  persistRewardFaceCache(cache);
+  await persistRewardFaceCache(cache);
 
   return {
     status: 'claimed',

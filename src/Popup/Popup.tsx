@@ -10,6 +10,12 @@ import type {
 } from '../api/kyc.ts';
 import { bindToken } from '../api/backend.ts';
 import { sha256 } from '../utils/crypto.ts';
+import {
+  storageGet,
+  storageGetMany,
+  storageRemove,
+  storageSet,
+} from '../utils/chromeStorage.ts';
 
 type ContentScriptResponse<T> =
   | { ok: true; data: T; userId?: string }
@@ -106,58 +112,27 @@ const languageOptions = [
 const KYS_STATUS_STORAGE_KEY = 'lastKysStatus';
 const REWARDS_STORAGE_KEY = 'lastRewards';
 const FACE_VERIFICATION_STORAGE_KEY = 'lastRewardFaceVerification';
+const LAST_LINK_STORAGE_KEY = 'lastLink';
+const PREFERRED_LANG_STORAGE_KEY = 'preferredLang';
+const LAST_LINK_EXPIRES_AT_STORAGE_KEY = 'lastLinkExpiresAt';
 const FACE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 
-const readStoredKysStatus = (): KysStatusSummary | null => {
-  const stored = localStorage.getItem(KYS_STATUS_STORAGE_KEY);
-  if (!stored) {
-    return null;
-  }
-
+const readStoredKysStatus = async (): Promise<KysStatusSummary | null> => {
   try {
-    return JSON.parse(stored) as KysStatusSummary;
+    const stored = await storageGet<KysStatusSummary>(KYS_STATUS_STORAGE_KEY);
+    return stored && typeof stored === 'object' ? stored : null;
   } catch {
     return null;
   }
 };
 
-const persistKysStatus = (status: KysStatusSummary) => {
-  localStorage.setItem(KYS_STATUS_STORAGE_KEY, JSON.stringify(status));
+const persistKysStatus = async (status: KysStatusSummary) => {
+  await storageSet(KYS_STATUS_STORAGE_KEY, status);
 };
 
-const readStoredRewards = (): StoredRewardsState => {
-  const stored = localStorage.getItem(REWARDS_STORAGE_KEY);
-  if (!stored) return { list: [], error: null, fetchedAt: null };
-
+const persistRewards = async (state: StoredRewardsState) => {
   try {
-    const parsed = JSON.parse(stored) as RewardEntity[] | StoredRewardsState;
-
-    if (Array.isArray(parsed)) {
-      return { list: parsed, error: null, fetchedAt: null };
-    }
-
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      Array.isArray((parsed as StoredRewardsState).list)
-    ) {
-      const { list, error, fetchedAt } = parsed as StoredRewardsState;
-      return {
-        list,
-        error: typeof error === 'string' || error === null ? error : null,
-        fetchedAt: typeof fetchedAt === 'string' ? fetchedAt : null,
-      };
-    }
-
-    return { list: [], error: null, fetchedAt: null };
-  } catch {
-    return { list: [], error: null, fetchedAt: null };
-  }
-};
-
-const persistRewards = (state: StoredRewardsState) => {
-  try {
-    localStorage.setItem(REWARDS_STORAGE_KEY, JSON.stringify(state));
+    await storageSet(REWARDS_STORAGE_KEY, state);
   } catch {
     // ignore
   }
@@ -165,40 +140,10 @@ const persistRewards = (state: StoredRewardsState) => {
 
 type StoredFaceVerification = FaceVerificationState & { fetchedAt: string };
 
-const readStoredFaceVerification = (): FaceVerificationState | null => {
-  const raw = localStorage.getItem(FACE_VERIFICATION_STORAGE_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as StoredFaceVerification;
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      typeof parsed.faceToken !== 'string' ||
-      typeof parsed.fetchedAt !== 'string'
-    ) {
-      return null;
-    }
-
-    return {
-      awardId: parsed.awardId,
-      faceToken: parsed.faceToken,
-      url: parsed.url,
-      ticket: parsed.ticket,
-      bizId: parsed.bizId,
-      fetchedAt: parsed.fetchedAt,
-    };
-  } catch {
-    return null;
-  }
-};
-
-const persistFaceVerification = (state: FaceVerificationState | null) => {
+const persistFaceVerification = async (state: FaceVerificationState | null) => {
   try {
     if (!state) {
-      localStorage.removeItem(FACE_VERIFICATION_STORAGE_KEY);
-      localStorage.removeItem('lastRewardFaceToken');
-      localStorage.removeItem('lastRewardFaceTokenFetchedAt');
+      await storageRemove(FACE_VERIFICATION_STORAGE_KEY);
       return;
     }
 
@@ -207,9 +152,7 @@ const persistFaceVerification = (state: FaceVerificationState | null) => {
       fetchedAt: state.fetchedAt ?? new Date().toISOString(),
     };
 
-    localStorage.setItem(FACE_VERIFICATION_STORAGE_KEY, JSON.stringify(payload));
-    localStorage.setItem('lastRewardFaceToken', state.faceToken);
-    localStorage.setItem('lastRewardFaceTokenFetchedAt', payload.fetchedAt);
+    await storageSet(FACE_VERIFICATION_STORAGE_KEY, payload);
   } catch {
     // ignore persistence errors
   }
@@ -276,42 +219,25 @@ const sendMessageToActiveTab = async <T,>(
 export const Popup = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
-  const [link, setLink] = useState<string | null>(
-    localStorage.getItem('lastLink') ?? null,
-  );
-  const [language, setLanguage] = useState<string>(
-    () => localStorage.getItem('preferredLang') ?? 'en',
-  );
-  const [linkExpiresAt, setLinkExpiresAt] = useState<number | null>(() => {
-    const stored = localStorage.getItem('lastLinkExpiresAt');
-    return stored ? Number(stored) : null;
-  });
+  const [link, setLink] = useState<string | null>(null);
+  const [language, setLanguage] = useState<string>('en');
+  const [linkExpiresAt, setLinkExpiresAt] = useState<number | null>(null);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [isSupportedSite, setIsSupportedSite] = useState<boolean | null>(null);
   const [copied, setCopied] = useState(false);
-  const [kysStatus, setKysStatus] = useState<KysStatusSummary | null>(() =>
-    readStoredKysStatus(),
-  );
+  const [kysStatus, setKysStatus] = useState<KysStatusSummary | null>(null);
   const [kysError, setKysError] = useState<string | null>(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [activeTab, setActiveTab] = useState<'link' | 'kyc' | 'rewards'>('link');
-  const storedRewards = readStoredRewards();
-  const [rewards, setRewards] = useState<RewardEntity[]>(storedRewards.list);
-  const [hasFetchedRewards, setHasFetchedRewards] = useState<boolean>(
-    storedRewards.list.length > 0 || storedRewards.fetchedAt !== null,
-  );
-  const [rewardsError, setRewardsError] = useState<string | null>(
-    storedRewards.error,
-  );
-  const [rewardsFetchedAt, setRewardsFetchedAt] = useState<string | null>(
-    storedRewards.fetchedAt,
-  );
+  const [rewards, setRewards] = useState<RewardEntity[]>([]);
+  const [hasFetchedRewards, setHasFetchedRewards] = useState<boolean>(false);
+  const [rewardsError, setRewardsError] = useState<string | null>(null);
+  const [rewardsFetchedAt, setRewardsFetchedAt] = useState<string | null>(null);
   const [isLoadingRewards, setIsLoadingRewards] = useState(false);
   const [claimingRewardId, setClaimingRewardId] = useState<number | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
-  const [faceVerification, setFaceVerification] = useState<FaceVerificationState | null>(
-    () => readStoredFaceVerification(),
-  );
+  const [faceVerification, setFaceVerification] =
+    useState<FaceVerificationState | null>(null);
   const [faceRemainingMs, setFaceRemainingMs] = useState<number | null>(null);
   const [copiedFaceLink, setCopiedFaceLink] = useState(false);
 
@@ -326,6 +252,87 @@ export const Popup = () => {
     if (days > 0) return `${days}d ${hours}h`;
     if (hours > 0) return `${hours}h ${minutes}m`;
     return `${minutes}m`;
+  }, []);
+
+  useEffect(() => {
+    const loadStoredState = async () => {
+      try {
+        const stored = await storageGetMany([
+          LAST_LINK_STORAGE_KEY,
+          PREFERRED_LANG_STORAGE_KEY,
+          LAST_LINK_EXPIRES_AT_STORAGE_KEY,
+          KYS_STATUS_STORAGE_KEY,
+          REWARDS_STORAGE_KEY,
+          FACE_VERIFICATION_STORAGE_KEY,
+        ]);
+
+        const storedLink =
+          typeof stored[LAST_LINK_STORAGE_KEY] === 'string'
+            ? (stored[LAST_LINK_STORAGE_KEY] as string)
+            : null;
+        setLink(storedLink);
+
+        const storedLang =
+          typeof stored[PREFERRED_LANG_STORAGE_KEY] === 'string'
+            ? (stored[PREFERRED_LANG_STORAGE_KEY] as string).trim()
+            : '';
+        setLanguage(storedLang || 'en');
+
+        const expiresRaw = stored[LAST_LINK_EXPIRES_AT_STORAGE_KEY];
+        const expiresAt =
+          typeof expiresRaw === 'number'
+            ? expiresRaw
+            : typeof expiresRaw === 'string'
+              ? Number(expiresRaw)
+              : null;
+        setLinkExpiresAt(
+          typeof expiresAt === 'number' && !Number.isNaN(expiresAt)
+            ? expiresAt
+            : null,
+        );
+
+        const kysRaw = stored[KYS_STATUS_STORAGE_KEY];
+        setKysStatus(
+          kysRaw && typeof kysRaw === 'object'
+            ? (kysRaw as KysStatusSummary)
+            : null,
+        );
+
+        const rewardsRaw = stored[REWARDS_STORAGE_KEY];
+        if (
+          rewardsRaw &&
+          typeof rewardsRaw === 'object' &&
+          Array.isArray((rewardsRaw as StoredRewardsState).list)
+        ) {
+          const rewardsState = rewardsRaw as StoredRewardsState;
+          setRewards(rewardsState.list);
+          setRewardsError(
+            typeof rewardsState.error === 'string' || rewardsState.error === null
+              ? rewardsState.error
+              : null,
+          );
+          setRewardsFetchedAt(
+            typeof rewardsState.fetchedAt === 'string' ? rewardsState.fetchedAt : null,
+          );
+          setHasFetchedRewards(
+            rewardsState.list.length > 0 || rewardsState.fetchedAt !== null,
+          );
+        }
+
+        const faceRaw = stored[FACE_VERIFICATION_STORAGE_KEY];
+        if (
+          faceRaw &&
+          typeof faceRaw === 'object' &&
+          typeof (faceRaw as StoredFaceVerification).faceToken === 'string'
+        ) {
+          setFaceVerification(faceRaw as StoredFaceVerification);
+        }
+      } catch {
+        // ignore storage errors
+      }
+    };
+
+    void loadStoredState();
   }, []);
 
   useEffect(() => {
@@ -359,7 +366,7 @@ export const Popup = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('preferredLang', language);
+    void storageSet(PREFERRED_LANG_STORAGE_KEY, language);
   }, [language]);
 
   useEffect(() => {
@@ -378,9 +385,9 @@ export const Popup = () => {
       linkUrl.searchParams.set('lang', language);
       const updatedLink = linkUrl.toString();
       setLink(updatedLink);
-      localStorage.setItem('lastLink', updatedLink);
+      void storageSet(LAST_LINK_STORAGE_KEY, updatedLink);
       if (linkExpiresAt) {
-        localStorage.setItem('lastLinkExpiresAt', String(linkExpiresAt));
+        void storageSet(LAST_LINK_EXPIRES_AT_STORAGE_KEY, linkExpiresAt);
       }
     } catch {
       // Ignore malformed stored links
@@ -432,8 +439,7 @@ export const Popup = () => {
         throw new Error(response?.error ?? 'No response from content script');
       }
 
-      const userId =
-        response.userId ?? localStorage.getItem('BYBIT_GA_UID') ?? '';
+      const userId = response.userId ?? '';
       if (!userId) {
         throw new Error('User id is missing');
       }
@@ -446,8 +452,8 @@ export const Popup = () => {
       const resolvedLink = `${import.meta.env.VITE_FRONTEND_BASE_URL}?hash=${hashResponse}&lang=${language}`;
       const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
-      localStorage.setItem('lastLink', resolvedLink);
-      localStorage.setItem('lastLinkExpiresAt', String(expiresAt));
+      await storageSet(LAST_LINK_STORAGE_KEY, resolvedLink);
+      await storageSet(LAST_LINK_EXPIRES_AT_STORAGE_KEY, expiresAt);
       setLink(resolvedLink);
       setLinkExpiresAt(expiresAt);
     } catch (err) {
@@ -472,7 +478,7 @@ export const Popup = () => {
         throw new Error(response?.error ?? 'No response from content script');
       }
 
-      persistKysStatus(response.data);
+      await persistKysStatus(response.data);
       setKysStatus(response.data);
     } catch (_err) {
       const message =
@@ -481,7 +487,7 @@ export const Popup = () => {
         ? 'The page reloaded — reopen popup and try again.'
         : message;
 
-      const cached = readStoredKysStatus();
+      const cached = await readStoredKysStatus();
       const fallbackStatus = cached
         ? {
             ...cached,
@@ -492,7 +498,7 @@ export const Popup = () => {
           }
         : buildPendingKysStatus();
 
-      persistKysStatus(fallbackStatus);
+      await persistKysStatus(fallbackStatus);
       setKysStatus(fallbackStatus);
       setKysError(normalizedMessage);
     } finally {
@@ -504,7 +510,7 @@ export const Popup = () => {
     if (isSupportedSite !== true) {
       setRewardsError('Open this popup on bybit.com or bybitglobal.com.');
       const now = new Date().toISOString();
-      persistRewards({
+      void persistRewards({
         list: rewards,
         error: 'Open this popup on bybit.com or bybitglobal.com.',
         fetchedAt: now,
@@ -534,7 +540,7 @@ export const Popup = () => {
       setRewardsFetchedAt(now);
       setRewardsError(emptyError);
 
-      persistRewards({
+      void persistRewards({
         list: response.data,
         error: emptyError,
         fetchedAt: now,
@@ -548,7 +554,7 @@ export const Popup = () => {
       setRewardsError(normalizedMessage);
       const now = new Date().toISOString();
       setRewardsFetchedAt(now);
-      persistRewards({
+      void persistRewards({
         list: rewards,
         error: normalizedMessage,
         fetchedAt: now,
@@ -568,7 +574,7 @@ export const Popup = () => {
       setClaimError(null);
       setClaimingRewardId(reward.awardId);
       setFaceVerification(null);
-      persistFaceVerification(null);
+      void persistFaceVerification(null);
 
       try {
         const response = await sendMessageToActiveTab<ClaimRewardResult>({
@@ -580,8 +586,7 @@ export const Popup = () => {
           throw new Error(response?.error ?? 'Failed to claim reward');
         }
 
-        const userId =
-          response.userId ?? localStorage.getItem('BYBIT_GA_UID') ?? '';
+        const userId = response.userId ?? '';
         if (!userId) {
           throw new Error('User id is missing');
         }
@@ -602,11 +607,11 @@ export const Popup = () => {
             fetchedAt,
           };
 
-          persistFaceVerification(faceState);
+          void persistFaceVerification(faceState);
           setFaceVerification(faceState);
           setActiveTab('rewards');
         } else {
-          persistFaceVerification(null);
+          void persistFaceVerification(null);
           setFaceVerification(null);
           void handleFetchRewards();
         }
@@ -707,7 +712,7 @@ export const Popup = () => {
         url: updatedUrl,
       };
       setFaceVerification(updatedState);
-      persistFaceVerification(updatedState);
+      void persistFaceVerification(updatedState);
     } catch {
       // ignore malformed url
     }
@@ -769,8 +774,7 @@ export const Popup = () => {
   }, [rewardsFetchedAt]);
 
   const handleClearLink = useCallback(() => {
-    localStorage.removeItem('lastLink');
-    localStorage.removeItem('lastLinkExpiresAt');
+    void storageRemove([LAST_LINK_STORAGE_KEY, LAST_LINK_EXPIRES_AT_STORAGE_KEY]);
     setLink(null);
     setLinkExpiresAt(null);
   }, []);
@@ -887,7 +891,9 @@ export const Popup = () => {
 
             <div className="option-row">
               <div className="option-head">
-                <span className="option-label">Language for generated link</span>
+                <span className="option-label">
+                  Language for generated link
+                </span>
                 <span className="muted-text">Saved for next time</span>
               </div>
               <select
@@ -915,7 +921,13 @@ export const Popup = () => {
                 type="button"
                 onClick={handleCopyLink}
                 disabled={!link || isLinkExpired}
-                title={link ? (isLinkExpired ? 'Link expired' : 'Copy link') : 'No link yet'}
+                title={
+                  link
+                    ? isLinkExpired
+                      ? 'Link expired'
+                      : 'Copy link'
+                    : 'No link yet'
+                }
               >
                 {copied ? 'Copied' : 'Copy'}
               </button>
@@ -923,7 +935,9 @@ export const Popup = () => {
 
             {link ? (
               <div className="countdown-row">
-                <span className={`meta-label ${isLinkExpired ? 'accent-danger' : 'accent'}`}>
+                <span
+                  className={`meta-label ${isLinkExpired ? 'accent-danger' : 'accent'}`}
+                >
                   {isLinkExpired
                     ? 'Link expired — request a new one.'
                     : formattedRemaining
@@ -943,7 +957,9 @@ export const Popup = () => {
               </span>
               <span className="meta-label">Language: {language}</span>
               {link ? (
-                <span className="meta-label accent">Saved locally for quick reuse</span>
+                <span className="meta-label accent">
+                  Saved locally for quick reuse
+                </span>
               ) : null}
             </div>
           </section>
@@ -980,7 +996,7 @@ export const Popup = () => {
                 className="btn ghost"
                 type="button"
                 onClick={handleCheckKysStatus}
-                disabled={isCheckingStatus}
+                disabled={isSupportedSite !== true || isCheckingStatus}
               >
                 {isCheckingStatus ? 'Checking...' : 'Update status'}
               </button>
@@ -1028,7 +1044,9 @@ export const Popup = () => {
               {kysStatus?.status ||
                 (isCheckingStatus ? 'Checking...' : 'Not checked yet')}
             </span>
-            <span className="meta-label">Level: {kysStatus?.level || 'LEVEL_1'}</span>
+            <span className="meta-label">
+              Level: {kysStatus?.level || 'LEVEL_1'}
+            </span>
           </div>
 
           <div className="status-grid">
@@ -1096,7 +1114,9 @@ export const Popup = () => {
             </div>
 
             <div className="reward-summary">
-              <span className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}>
+              <span
+                className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}
+              >
                 Found {unclaimedRewards.length} unclaimed reward(s)
               </span>
               <button
@@ -1135,7 +1155,9 @@ export const Popup = () => {
           {faceVerification ? (
             <section className="card reward-card">
               <div className="card-top">
-                <div className="card-title reward-title">Face verification required</div>
+                <div className="card-title reward-title">
+                  Face verification required
+                </div>
                 <span className="muted-text">
                   {isFaceVerificationExpired
                     ? 'Face link expired — request again.'
@@ -1172,7 +1194,9 @@ export const Popup = () => {
                 <input
                   className="link-input"
                   readOnly
-                  value={faceVerification.url ?? 'Face link is not available yet'}
+                  value={
+                    faceVerification.url ?? 'Face link is not available yet'
+                  }
                 />
                 <button
                   className="btn ghost"
@@ -1212,9 +1236,14 @@ export const Popup = () => {
           ) : null}
 
           {unclaimedRewards.map((reward) => (
-            <section className="card reward-card" key={`${reward.awardId}-${reward.specCode}`}>
+            <section
+              className="card reward-card"
+              key={`${reward.awardId}-${reward.specCode}`}
+            >
               <div className="card-top">
-                <div className="card-title reward-title">{reward.awardTitle || reward.amountText}</div>
+                <div className="card-title reward-title">
+                  {reward.awardTitle || reward.amountText}
+                </div>
                 <span className="pill pill-warning">
                   {reward.statusText || reward.status}
                 </span>
@@ -1239,7 +1268,11 @@ export const Popup = () => {
                     claimingRewardId === reward.awardId
                   }
                 >
-                  {claimingRewardId === reward.awardId ? 'Claiming...' : faceVerification?.awardId === reward.awardId ? 'Verified? Claim' : 'Claim'}
+                  {claimingRewardId === reward.awardId
+                    ? 'Claiming...'
+                    : faceVerification?.awardId === reward.awardId
+                      ? 'Verified? Claim'
+                      : 'Claim'}
                 </button>
               </div>
             </section>
