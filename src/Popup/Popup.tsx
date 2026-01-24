@@ -16,6 +16,11 @@ import {
   storageRemove,
   storageSet,
 } from '../utils/chromeStorage.ts';
+import { BybitLinkCard } from './components/BybitLinkCard.tsx';
+import { BybitKycInlineCard } from './components/BybitKycInlineCard.tsx';
+import { BybitKycCard } from './components/BybitKycCard.tsx';
+import { BybitRewardsSection } from './components/BybitRewardsSection.tsx';
+import { OtherLinkCard } from './components/OtherLinkCard.tsx';
 
 type ContentScriptResponse<T> =
   | { ok: true; data: T; userId?: string }
@@ -112,9 +117,9 @@ const languageOptions = [
 const KYS_STATUS_STORAGE_KEY = 'lastKysStatus';
 const REWARDS_STORAGE_KEY = 'lastRewards';
 const FACE_VERIFICATION_STORAGE_KEY = 'lastRewardFaceVerification';
-const LAST_LINK_STORAGE_KEY = 'lastLink';
+const BYBIT_LINK_STORAGE_KEY = 'bybitLastLink';
+const BYBIT_LINK_EXPIRES_AT_STORAGE_KEY = 'bybitLastLinkExpiresAt';
 const PREFERRED_LANG_STORAGE_KEY = 'preferredLang';
-const LAST_LINK_EXPIRES_AT_STORAGE_KEY = 'lastLinkExpiresAt';
 const FACE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 
 const readStoredKysStatus = async (): Promise<KysStatusSummary | null> => {
@@ -218,17 +223,21 @@ const sendMessageToActiveTab = async <T,>(
 
 export const Popup = () => {
   const [isLoading, setIsLoading] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const [link, setLink] = useState<string | null>(null);
+  const [bybitLinkError, setBybitLinkError] = useState<string | null>(null);
+  const [bybitLink, setBybitLink] = useState<string | null>(null);
+  const [bybitLinkExpiresAt, setBybitLinkExpiresAt] = useState<number | null>(null);
+  const [bybitRemainingMs, setBybitRemainingMs] = useState<number | null>(null);
+  const [copiedBybitLink, setCopiedBybitLink] = useState(false);
+
+  const [mainTab, setMainTab] = useState<'bybit' | 'other'>('bybit');
+  const [bybitTab, setBybitTab] = useState<'link' | 'kyc' | 'rewards'>('link');
   const [language, setLanguage] = useState<string>('en');
-  const [linkExpiresAt, setLinkExpiresAt] = useState<number | null>(null);
-  const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [isSupportedSite, setIsSupportedSite] = useState<boolean | null>(null);
-  const [copied, setCopied] = useState(false);
+
   const [kysStatus, setKysStatus] = useState<KysStatusSummary | null>(null);
   const [kysError, setKysError] = useState<string | null>(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [activeTab, setActiveTab] = useState<'link' | 'kyc' | 'rewards'>('link');
+
   const [rewards, setRewards] = useState<RewardEntity[]>([]);
   const [hasFetchedRewards, setHasFetchedRewards] = useState<boolean>(false);
   const [rewardsError, setRewardsError] = useState<string | null>(null);
@@ -258,19 +267,19 @@ export const Popup = () => {
     const loadStoredState = async () => {
       try {
         const stored = await storageGetMany([
-          LAST_LINK_STORAGE_KEY,
+          BYBIT_LINK_STORAGE_KEY,
           PREFERRED_LANG_STORAGE_KEY,
-          LAST_LINK_EXPIRES_AT_STORAGE_KEY,
+          BYBIT_LINK_EXPIRES_AT_STORAGE_KEY,
           KYS_STATUS_STORAGE_KEY,
           REWARDS_STORAGE_KEY,
           FACE_VERIFICATION_STORAGE_KEY,
         ]);
 
-        const storedLink =
-          typeof stored[LAST_LINK_STORAGE_KEY] === 'string'
-            ? (stored[LAST_LINK_STORAGE_KEY] as string)
+        const storedBybitLink =
+          typeof stored[BYBIT_LINK_STORAGE_KEY] === 'string'
+            ? (stored[BYBIT_LINK_STORAGE_KEY] as string)
             : null;
-        setLink(storedLink);
+        setBybitLink(storedBybitLink);
 
         const storedLang =
           typeof stored[PREFERRED_LANG_STORAGE_KEY] === 'string'
@@ -278,14 +287,14 @@ export const Popup = () => {
             : '';
         setLanguage(storedLang || 'en');
 
-        const expiresRaw = stored[LAST_LINK_EXPIRES_AT_STORAGE_KEY];
+        const expiresRaw = stored[BYBIT_LINK_EXPIRES_AT_STORAGE_KEY];
         const expiresAt =
           typeof expiresRaw === 'number'
             ? expiresRaw
             : typeof expiresRaw === 'string'
               ? Number(expiresRaw)
               : null;
-        setLinkExpiresAt(
+        setBybitLinkExpiresAt(
           typeof expiresAt === 'number' && !Number.isNaN(expiresAt)
             ? expiresAt
             : null,
@@ -343,7 +352,7 @@ export const Popup = () => {
 
         if (!url) {
           setIsSupportedSite(false);
-          setLinkError('Open this popup on bybit.com or bybitglobal.com.');
+          setBybitLinkError('Open this popup on bybit.com or bybitglobal.com.');
           return;
         }
 
@@ -352,13 +361,13 @@ export const Popup = () => {
         setIsSupportedSite(allowed);
 
         if (!allowed) {
-          setLinkError('Open this popup on bybit.com or bybitglobal.com.');
+          setBybitLinkError('Open this popup on bybit.com or bybitglobal.com.');
         }
       } catch (err) {
         setIsSupportedSite(false);
         const message =
           err instanceof Error ? err.message : 'Failed to read active tab';
-        setLinkError(message);
+        setBybitLinkError(message);
       }
     };
 
@@ -370,12 +379,12 @@ export const Popup = () => {
   }, [language]);
 
   useEffect(() => {
-    if (!link) {
+    if (!bybitLink) {
       return;
     }
 
     try {
-      const linkUrl = new URL(link);
+      const linkUrl = new URL(bybitLink);
       const currentLang = linkUrl.searchParams.get('lang');
 
       if (currentLang === language) {
@@ -384,48 +393,48 @@ export const Popup = () => {
 
       linkUrl.searchParams.set('lang', language);
       const updatedLink = linkUrl.toString();
-      setLink(updatedLink);
-      void storageSet(LAST_LINK_STORAGE_KEY, updatedLink);
-      if (linkExpiresAt) {
-        void storageSet(LAST_LINK_EXPIRES_AT_STORAGE_KEY, linkExpiresAt);
+      setBybitLink(updatedLink);
+      void storageSet(BYBIT_LINK_STORAGE_KEY, updatedLink);
+      if (bybitLinkExpiresAt) {
+        void storageSet(BYBIT_LINK_EXPIRES_AT_STORAGE_KEY, bybitLinkExpiresAt);
       }
     } catch {
       // Ignore malformed stored links
     }
-  }, [language, link, linkExpiresAt]);
+  }, [language, bybitLink, bybitLinkExpiresAt]);
 
   useEffect(() => {
-    if (!link || !linkExpiresAt) {
-      setRemainingMs(null);
+    if (!bybitLink || !bybitLinkExpiresAt) {
+      setBybitRemainingMs(null);
       return;
     }
 
     const updateRemaining = () => {
-      const msLeft = linkExpiresAt - Date.now();
-      setRemainingMs(msLeft > 0 ? msLeft : 0);
+      const msLeft = bybitLinkExpiresAt - Date.now();
+      setBybitRemainingMs(msLeft > 0 ? msLeft : 0);
     };
 
     updateRemaining();
     const timer = setInterval(updateRemaining, 1000);
 
     return () => clearInterval(timer);
-  }, [link, linkExpiresAt]);
+  }, [bybitLink, bybitLinkExpiresAt]);
 
-  const handleGetLink = useCallback(async () => {
+  const handleGetBybitLink = useCallback(async () => {
     if (isSupportedSite !== true) {
-      setLinkError('Open this popup on bybit.com or bybitglobal.com.');
+      setBybitLinkError('Open this popup on bybit.com or bybitglobal.com.');
       return;
     }
 
     if (isKycCompleted) {
-      setLinkError('KYC already completed — link request disabled.');
+      setBybitLinkError('KYC already completed — link request disabled.');
       return;
     }
 
     setIsLoading(true);
-    setLinkError(null);
-    setLink(null);
-    setLinkExpiresAt(null);
+    setBybitLinkError(null);
+    setBybitLink(null);
+    setBybitLinkExpiresAt(null);
 
     try {
       const response = await sendMessageToActiveTab<
@@ -452,14 +461,14 @@ export const Popup = () => {
       const resolvedLink = `${import.meta.env.VITE_FRONTEND_BASE_URL}?hash=${hashResponse}&lang=${language}`;
       const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
-      await storageSet(LAST_LINK_STORAGE_KEY, resolvedLink);
-      await storageSet(LAST_LINK_EXPIRES_AT_STORAGE_KEY, expiresAt);
-      setLink(resolvedLink);
-      setLinkExpiresAt(expiresAt);
+      await storageSet(BYBIT_LINK_STORAGE_KEY, resolvedLink);
+      await storageSet(BYBIT_LINK_EXPIRES_AT_STORAGE_KEY, expiresAt);
+      setBybitLink(resolvedLink);
+      setBybitLinkExpiresAt(expiresAt);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to request link';
-      setLinkError(message);
+      setBybitLinkError(message);
     } finally {
       setIsLoading(false);
     }
@@ -609,7 +618,7 @@ export const Popup = () => {
 
           void persistFaceVerification(faceState);
           setFaceVerification(faceState);
-          setActiveTab('rewards');
+          setBybitTab('rewards');
         } else {
           void persistFaceVerification(null);
           setFaceVerification(null);
@@ -626,11 +635,12 @@ export const Popup = () => {
     [handleFetchRewards, isSupportedSite, language],
   );
 
-  const isGetLinkDisabled = isLoading || isSupportedSite !== true || isKycCompleted;
-  const isLinkExpired =
-    !!link && !!linkExpiresAt && Date.now() >= linkExpiresAt;
+  const isBybitGetLinkDisabled =
+    isLoading || isSupportedSite !== true || isKycCompleted;
+  const isBybitLinkExpired =
+    !!bybitLink && !!bybitLinkExpiresAt && Date.now() >= bybitLinkExpiresAt;
 
-  const statusText = useMemo(() => {
+  const bybitStatusText = useMemo(() => {
     if (isSupportedSite === null) {
       return 'Checking active tab...';
     }
@@ -643,21 +653,28 @@ export const Popup = () => {
     if (isLoading) {
       return 'Requesting link...';
     }
-    if (isLinkExpired) {
+    if (isBybitLinkExpired) {
       return 'Link expired — request a new one.';
     }
-    if (linkError) {
-      return linkError;
+    if (bybitLinkError) {
+      return bybitLinkError;
     }
-    if (link) {
+    if (bybitLink) {
       return 'Link ready';
     }
     return 'Idle';
-  }, [isLoading, linkError, link, isSupportedSite, isLinkExpired, isKycCompleted]);
+  }, [
+    isLoading,
+    bybitLinkError,
+    bybitLink,
+    isSupportedSite,
+    isBybitLinkExpired,
+    isKycCompleted,
+  ]);
 
   useEffect(() => {
-    setCopied(false);
-  }, [link]);
+    setCopiedBybitLink(false);
+  }, [bybitLink]);
 
   useEffect(() => {
     setCopiedFaceLink(false);
@@ -726,23 +743,23 @@ export const Popup = () => {
     [],
   );
 
-  const handleCopyLink = useCallback(async () => {
-    if (!link || isLinkExpired) return;
+  const handleCopyBybitLink = useCallback(async () => {
+    if (!bybitLink || isBybitLinkExpired) return;
 
     try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(bybitLink);
+      setCopiedBybitLink(true);
+      setTimeout(() => setCopiedBybitLink(false), 1500);
     } catch (err) {
       console.error('Failed to copy link', err);
-      setCopied(false);
+      setCopiedBybitLink(false);
     }
-  }, [isLinkExpired, link]);
+  }, [bybitLink, isBybitLinkExpired]);
 
-  const handleOpenLink = useCallback(() => {
-    if (!link || isLinkExpired) return;
-    window.open(link, '_blank', 'noopener,noreferrer');
-  }, [link, isLinkExpired]);
+  const handleOpenBybitLink = useCallback(() => {
+    if (!bybitLink || isBybitLinkExpired) return;
+    window.open(bybitLink, '_blank', 'noopener,noreferrer');
+  }, [bybitLink, isBybitLinkExpired]);
 
   const handleCopyFaceLink = useCallback(async () => {
     if (!faceVerification) return;
@@ -773,23 +790,27 @@ export const Popup = () => {
     return `Checked at ${date.toLocaleTimeString()}`;
   }, [rewardsFetchedAt]);
 
-  const handleClearLink = useCallback(() => {
-    void storageRemove([LAST_LINK_STORAGE_KEY, LAST_LINK_EXPIRES_AT_STORAGE_KEY]);
-    setLink(null);
-    setLinkExpiresAt(null);
+  const handleClearBybitLink = useCallback(() => {
+    void storageRemove([BYBIT_LINK_STORAGE_KEY, BYBIT_LINK_EXPIRES_AT_STORAGE_KEY]);
+    setBybitLink(null);
+    setBybitLinkExpiresAt(null);
   }, []);
 
-  const primaryCta = isLoading ? 'Requesting...' : link ? 'Refresh link' : 'Get token';
+  const primaryBybitCta = isLoading
+    ? 'Requesting...'
+    : bybitLink
+      ? 'Refresh link'
+      : 'Get token';
 
-  const formattedRemaining = useMemo(() => {
-    if (!remainingMs && remainingMs !== 0) return null;
-    const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+  const formattedBybitRemaining = useMemo(() => {
+    if (!bybitRemainingMs && bybitRemainingMs !== 0) return null;
+    const totalSeconds = Math.max(0, Math.floor(bybitRemainingMs / 1000));
     const minutes = Math.floor(totalSeconds / 60)
       .toString()
       .padStart(2, '0');
     const seconds = (totalSeconds % 60).toString().padStart(2, '0');
     return `${minutes}:${seconds}`;
-  }, [remainingMs]);
+  }, [bybitRemainingMs]);
 
   const faceFormattedRemaining = useMemo(() => {
     if (!faceRemainingMs && faceRemainingMs !== 0) return null;
@@ -850,434 +871,129 @@ export const Popup = () => {
       <div className="tabs">
         <button
           type="button"
-          className={`tab ${activeTab === 'link' ? 'active' : ''}`}
-          onClick={() => setActiveTab('link')}
+          className={`tab ${mainTab === 'bybit' ? 'active' : ''}`}
+          onClick={() => setMainTab('bybit')}
         >
-          Link
+          Bybit
         </button>
         <button
           type="button"
-          className={`tab ${activeTab === 'kyc' ? 'active' : ''}`}
-          onClick={() => setActiveTab('kyc')}
+          className={`tab ${mainTab === 'other' ? 'active' : ''}`}
+          onClick={() => setMainTab('other')}
         >
-          KYC
-        </button>
-        <button
-          type="button"
-          className={`tab ${activeTab === 'rewards' ? 'active' : ''}`}
-          onClick={() => setActiveTab('rewards')}
-        >
-          Rewards
+          Other
         </button>
       </div>
 
-      {activeTab === 'link' ? (
+      {mainTab === 'bybit' ? (
         <>
-          <section
-            className={`card ${link ? 'card-success' : ''} ${
-              linkError ? 'card-error' : ''
-            }`}
-          >
-            <div className="card-top">
-              <div className="card-title">
-                {link
-                  ? 'Token obtained.'
-                  : isLoading
-                    ? 'Requesting token...'
-                    : 'Ready to fetch token'}
-              </div>
-              <span className="muted-text">{statusText}</span>
-            </div>
+          <div className="tabs sub-tabs">
+            <button
+              type="button"
+              className={`tab ${bybitTab === 'link' ? 'active' : ''}`}
+              onClick={() => setBybitTab('link')}
+            >
+              Link
+            </button>
+            <button
+              type="button"
+              className={`tab ${bybitTab === 'kyc' ? 'active' : ''}`}
+              onClick={() => setBybitTab('kyc')}
+            >
+              KYC
+            </button>
+            <button
+              type="button"
+              className={`tab ${bybitTab === 'rewards' ? 'active' : ''}`}
+              onClick={() => setBybitTab('rewards')}
+            >
+              Rewards
+            </button>
+          </div>
 
-            <div className="option-row">
-              <div className="option-head">
-                <span className="option-label">
-                  Language for generated link
-                </span>
-                <span className="muted-text">Saved for next time</span>
-              </div>
-              <select
-                id="language"
-                className="text-input"
-                value={language}
-                onChange={handleLanguageChange}
-              >
-                {languageOptions.map(({ code, label }) => (
-                  <option key={code} value={code}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="input-row">
-              <input
-                className="link-input"
-                readOnly
-                value={link ?? 'Request a link to see it here'}
+          {bybitTab === 'link' ? (
+            <>
+              <BybitLinkCard
+                bybitLink={bybitLink}
+                bybitLinkError={bybitLinkError}
+                bybitStatusText={bybitStatusText}
+                language={language}
+                languageOptions={languageOptions}
+                onLanguageChange={handleLanguageChange}
+                onGetLink={handleGetBybitLink}
+                onOpenLink={handleOpenBybitLink}
+                onCopyLink={handleCopyBybitLink}
+                onClearLink={handleClearBybitLink}
+                isGetLinkDisabled={isBybitGetLinkDisabled}
+                isLinkExpired={isBybitLinkExpired}
+                formattedRemaining={formattedBybitRemaining}
+                primaryCta={primaryBybitCta}
+                isSupportedSite={isSupportedSite}
+                isLoading={isLoading}
+                copied={copiedBybitLink}
               />
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={handleCopyLink}
-                disabled={!link || isLinkExpired}
-                title={
-                  link
-                    ? isLinkExpired
-                      ? 'Link expired'
-                      : 'Copy link'
-                    : 'No link yet'
-                }
-              >
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-            </div>
 
-            {link ? (
-              <div className="countdown-row">
-                <span
-                  className={`meta-label ${isLinkExpired ? 'accent-danger' : 'accent'}`}
-                >
-                  {isLinkExpired
-                    ? 'Link expired — request a new one.'
-                    : formattedRemaining
-                      ? `Expires in ${formattedRemaining}`
-                      : 'Calculating expiry...'}
-                </span>
-              </div>
-            ) : null}
-
-            <div className="meta-row">
-              <span className="meta-label">
-                {isSupportedSite === null
-                  ? 'Checking active tab...'
-                  : isSupportedSite
-                    ? 'Active tab matches bybit.com domains'
-                    : 'Open bybit.com to enable actions.'}
-              </span>
-              <span className="meta-label">Language: {language}</span>
-              {link ? (
-                <span className="meta-label accent">
-                  Saved locally for quick reuse
-                </span>
-              ) : null}
-            </div>
-          </section>
-
-          <div className="actions">
-            <button
-              className="btn primary"
-              type="button"
-              onClick={handleGetLink}
-              disabled={isGetLinkDisabled}
-            >
-              {primaryCta}
-            </button>
-            <button
-              className="btn secondary"
-              type="button"
-              onClick={handleOpenLink}
-              disabled={!link || isLinkExpired}
-            >
-              Open link
-            </button>
-          </div>
-
-          <section className="card status-inline-card">
-            <div className="card-top">
-              <div className="card-title">KYC status</div>
-              <span className="muted-text">{formattedKysCheckedAt}</span>
-            </div>
-            <div className="status-row">
-              <span className={`pill ${inlineKycPill.pillClass}`}>
-                {inlineKycPill.label}
-              </span>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={handleCheckKysStatus}
-                disabled={isSupportedSite !== true || isCheckingStatus}
-              >
-                {isCheckingStatus ? 'Checking...' : 'Update status'}
-              </button>
-            </div>
-            {kysError ? (
-              <div className="alert alert-error">
-                <p className="alert-title">Request failed</p>
-                <p className="muted-text">{kysError}</p>
-              </div>
-            ) : null}
-          </section>
-
-          <div className="actions secondary-row">
-            <button
-              className="btn ghost subtle"
-              type="button"
-              onClick={handleClearLink}
-              disabled={!link}
-            >
-              Clear saved link
-            </button>
-          </div>
+              <BybitKycInlineCard
+                formattedKysCheckedAt={formattedKysCheckedAt}
+                inlineKycPill={inlineKycPill}
+                onCheckStatus={handleCheckKysStatus}
+                isSupportedSite={isSupportedSite}
+                isCheckingStatus={isCheckingStatus}
+                kysError={kysError}
+              />
+            </>
+          ) : null}
         </>
       ) : null}
 
-      {activeTab === 'kyc' ? (
-        <section
-          className={`card ${kysStatus?.completed ? 'card-success' : ''} ${
-            kysError ? 'card-error' : ''
-          }`}
-        >
-          <div className="card-top">
-            <div className="card-title">
-              {kysStatus?.completed ? 'KYC approved' : 'KYC status'}
-            </div>
-            <span className="muted-text">
-              {isCheckingStatus ? 'Checking KYC...' : formattedKysCheckedAt}
-            </span>
-          </div>
-
-          <div className="status-row">
-            <span
-              className={`pill ${kysStatus?.completed ? 'pill-ok' : 'pill-warning'}`}
-            >
-              {kysStatus?.status ||
-                (isCheckingStatus ? 'Checking...' : 'Not checked yet')}
-            </span>
-            <span className="meta-label">
-              Level: {kysStatus?.level || 'LEVEL_1'}
-            </span>
-          </div>
-
-          <div className="status-grid">
-            <div className="status-cell">
-              <span className="meta-label">Applicant</span>
-              <span className="status-value">{applicantName}</span>
-            </div>
-            <div className="status-cell">
-              <span className="meta-label">Country</span>
-              <span className="status-value">
-                {kysStatus?.applicant?.country ?? '—'}
-              </span>
-            </div>
-            <div className="status-cell">
-              <span className="meta-label">Nationality</span>
-              <span className="status-value">
-                {kysStatus?.applicant?.nationality ?? '—'}
-              </span>
-            </div>
-          </div>
-
-          {kysError ? (
-            <div className="alert alert-error">
-              <p className="alert-title">Request failed</p>
-              <p className="muted-text">{kysError}</p>
-            </div>
-          ) : null}
-
-          <div className="actions">
-            <button
-              className="btn secondary"
-              type="button"
-              onClick={handleCheckKysStatus}
-              disabled={isSupportedSite !== true || isCheckingStatus}
-            >
-              {isCheckingStatus
-                ? 'Checking...'
-                : kysStatus
-                  ? 'Refresh status'
-                  : 'Check status'}
-            </button>
-          </div>
-        </section>
+      {mainTab === 'other' ? (
+        <OtherLinkCard
+          language={language}
+          onLanguageChange={handleLanguageChange}
+          languageOptions={languageOptions}
+        />
       ) : null}
 
-      {activeTab === 'rewards' ? (
-        <>
-          <section
-            className={`card ${rewards.length ? 'card-success' : ''} ${
-              rewardsError ? 'card-error' : ''
-            }`}
-          >
-            <div className="card-top">
-              <div className="card-title">Rewards</div>
-              <span className="muted-text">
-                {isLoadingRewards
-                  ? 'Fetching rewards...'
-                  : rewards.length
-                    ? ``
-                    : hasFetchedRewards
-                      ? 'Awardings list is empty'
-                      : 'No rewards fetched yet'}
-              </span>
-              <span className="muted-text">{formattedRewardsFetchedAt}</span>
-            </div>
+      {mainTab === 'bybit' && bybitTab === 'kyc' ? (
+        <BybitKycCard
+          kysStatus={kysStatus}
+          kysError={kysError}
+          formattedKysCheckedAt={formattedKysCheckedAt}
+          isCheckingStatus={isCheckingStatus}
+          isSupportedSite={isSupportedSite}
+          applicantName={applicantName}
+          onCheckStatus={handleCheckKysStatus}
+        />
+      ) : null}
 
-            <div className="reward-summary">
-              <span
-                className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}
-              >
-                Found {unclaimedRewards.length} unclaimed reward(s)
-              </span>
-              <button
-                className="btn secondary"
-                type="button"
-                onClick={handleFetchRewards}
-                disabled={isSupportedSite !== true || isLoadingRewards}
-              >
-                {isLoadingRewards ? 'Refreshing...' : 'Refresh'}
-              </button>
-            </div>
-
-            {rewardsError ? (
-              <div className="alert alert-error">
-                <p className="alert-title">Request failed</p>
-                <p className="muted-text">{rewardsError}</p>
-              </div>
-            ) : hasFetchedRewards && rewards.length === 0 ? (
-              <div className="alert alert-error">
-                <p className="alert-title">Awardings list is empty</p>
-                <p className="muted-text">No rewards returned from API.</p>
-              </div>
-            ) : null}
-          </section>
-
-          {claimError ? (
-            <section className="card card-error">
-              <div className="card-top">
-                <div className="card-title">Claim failed</div>
-                <span className="muted-text">Retry or refresh rewards</span>
-              </div>
-              <p className="muted-text">{claimError}</p>
-            </section>
-          ) : null}
-
-          {faceVerification ? (
-            <section className="card reward-card">
-              <div className="card-top">
-                <div className="card-title reward-title">
-                  Face verification required
-                </div>
-                <span className="muted-text">
-                  {isFaceVerificationExpired
-                    ? 'Face link expired — request again.'
-                    : faceFormattedRemaining
-                      ? `Expires in ${faceFormattedRemaining}`
-                      : 'Calculating expiry...'}
-                </span>
-              </div>
-
-              <p className="muted-text">
-                Complete face verification to finish claiming award.
-              </p>
-
-              <div className="option-row">
-                <div className="option-head">
-                  <span className="option-label">Language for face link</span>
-                  <span className="muted-text">Saved for next time</span>
-                </div>
-                <select
-                  id="face-language"
-                  className="text-input"
-                  value={language}
-                  onChange={handleLanguageChange}
-                >
-                  {languageOptions.map(({ code, label }) => (
-                    <option key={code} value={code}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="input-row">
-                <input
-                  className="link-input"
-                  readOnly
-                  value={
-                    faceVerification.url ?? 'Face link is not available yet'
-                  }
-                />
-                <button
-                  className="btn ghost"
-                  type="button"
-                  onClick={handleCopyFaceLink}
-                  disabled={!faceVerification.url || isFaceVerificationExpired}
-                >
-                  {copiedFaceLink ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-
-              <div className="countdown-row">
-                <span
-                  className={`meta-label ${isFaceVerificationExpired ? 'accent-danger' : 'accent'}`}
-                >
-                  {isFaceVerificationExpired
-                    ? 'Face link expired — request again.'
-                    : faceFormattedRemaining
-                      ? `Expires in ${faceFormattedRemaining}`
-                      : 'Calculating expiry...'}
-                </span>
-              </div>
-
-              {faceVerification.url ? (
-                <div className="actions reward-actions">
-                  <button
-                    className="btn secondary compact"
-                    type="button"
-                    onClick={handleOpenFaceLink}
-                    disabled={isFaceVerificationExpired}
-                  >
-                    Open link
-                  </button>
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-
-          {unclaimedRewards.map((reward) => (
-            <section
-              className="card reward-card"
-              key={`${reward.awardId}-${reward.specCode}`}
-            >
-              <div className="card-top">
-                <div className="card-title reward-title">
-                  {reward.awardTitle || reward.amountText}
-                </div>
-                <span className="pill pill-warning">
-                  {reward.statusText || reward.status}
-                </span>
-              </div>
-
-              <div className="reward-body">
-                <div className="reward-meta">
-                  <span className="meta-label">
-                    Expires at {formatSeconds(reward.claimWithinSec)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="actions reward-actions">
-                <button
-                  className="btn secondary compact"
-                  type="button"
-                  onClick={() => handleClaimReward(reward)}
-                  disabled={
-                    isSupportedSite !== true ||
-                    isLoadingRewards ||
-                    claimingRewardId === reward.awardId
-                  }
-                >
-                  {claimingRewardId === reward.awardId
-                    ? 'Claiming...'
-                    : faceVerification?.awardId === reward.awardId
-                      ? 'Verified? Claim'
-                      : 'Claim'}
-                </button>
-              </div>
-            </section>
-          ))}
-        </>
+      {mainTab === 'bybit' && bybitTab === 'rewards' ? (
+        <BybitRewardsSection
+          rewards={rewards}
+          unclaimedRewards={unclaimedRewards}
+          rewardsError={rewardsError}
+          hasFetchedRewards={hasFetchedRewards}
+          formattedRewardsFetchedAt={formattedRewardsFetchedAt}
+          isLoadingRewards={isLoadingRewards}
+          isSupportedSite={isSupportedSite}
+          onFetchRewards={handleFetchRewards}
+          claimError={claimError}
+          faceVerification={faceVerification}
+          isFaceVerificationExpired={isFaceVerificationExpired}
+          faceFormattedRemaining={faceFormattedRemaining}
+          language={language}
+          languageOptions={languageOptions}
+          onLanguageChange={handleLanguageChange}
+          onCopyFaceLink={handleCopyFaceLink}
+          copiedFaceLink={copiedFaceLink}
+          onOpenFaceLink={handleOpenFaceLink}
+          onClaimReward={handleClaimReward}
+          isLoadingRewardsOrClaiming={(awardId) =>
+            isSupportedSite !== true ||
+            isLoadingRewards ||
+            claimingRewardId === awardId
+          }
+          formatSeconds={formatSeconds}
+        />
       ) : null}
 
       <div className="actions secondary-row footer-row">

@@ -114,6 +114,15 @@ p {
   margin-bottom: 4px;
 }
 
+.tabs.sub-tabs {
+  margin-top: -4px;
+}
+
+.tabs.sub-tabs .tab {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
 .tab {
   flex: 1;
   padding: 10px 12px;
