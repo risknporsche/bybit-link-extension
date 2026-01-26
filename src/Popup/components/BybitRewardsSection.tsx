@@ -4,11 +4,12 @@ import type { RewardEntity } from '../../api/kyc.ts';
 type LanguageOption = { code: string; label: string };
 type FaceVerificationState = {
   awardId: number;
-  faceToken: string;
+  faceToken?: string;
   url?: string;
   ticket?: string;
   bizId?: string;
   fetchedAt?: string;
+  provider?: string;
 };
 
 type BybitRewardsSectionProps = {
@@ -80,7 +81,9 @@ export const BybitRewardsSection = ({
         </div>
 
         <div className="reward-summary">
-          <span className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}>
+          <span
+            className={`pill ${unclaimedRewards ? 'pill-ok' : 'pill-warning'}`}
+          >
             Found {unclaimedRewards.length} unclaimed reward(s)
           </span>
           <button
@@ -119,14 +122,9 @@ export const BybitRewardsSection = ({
       {faceVerification ? (
         <section className="card reward-card">
           <div className="card-top">
-            <div className="card-title reward-title">Face verification required</div>
-            <span className="muted-text">
-              {isFaceVerificationExpired
-                ? 'Face link expired — request again.'
-                : faceFormattedRemaining
-                  ? `Expires in ${faceFormattedRemaining}`
-                  : 'Calculating expiry...'}
-            </span>
+            <div className="card-title reward-title">
+              Face verification required
+            </div>
           </div>
 
           <p className="muted-text">
@@ -162,7 +160,7 @@ export const BybitRewardsSection = ({
               className="btn ghost"
               type="button"
               onClick={onCopyFaceLink}
-              disabled={!faceVerification.url || isFaceVerificationExpired}
+              disabled={!faceVerification.url}
             >
               {copiedFaceLink ? 'Copied' : 'Copy'}
             </button>
@@ -176,7 +174,7 @@ export const BybitRewardsSection = ({
                 ? 'Face link expired — request again.'
                 : faceFormattedRemaining
                   ? `Expires in ${faceFormattedRemaining}`
-                  : 'Calculating expiry...'}
+                  : 'Expiry time not provided.'}
             </span>
           </div>
 

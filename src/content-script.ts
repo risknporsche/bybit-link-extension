@@ -14,6 +14,7 @@ import {
   type RewardEntity,
 } from './api/kyc.ts';
 import { storageGet, storageSet } from './utils/chromeStorage.ts';
+import { defaultKycInfoPayload } from './common/constants.ts';
 
 type Message =
   | {
@@ -38,17 +39,6 @@ type Message =
 type ContentScriptResponse<T> =
   | { ok: true; data: T }
   | { ok: false; error: string };
-
-const defaultPayload: GetVerificationSdkKysInfoPayload = {
-  country: 'UY',
-  doc_type: 'KYC_DOC_TYPE_ID',
-  announced: true,
-  extra_params: {
-    hkg_poa_agreement: {
-      agree: false,
-    },
-  },
-};
 
 const KYS_STATUS_STORAGE_KEY = 'lastKysStatus';
 
@@ -95,7 +85,9 @@ const handleGetKycLink = async (
       obtain_verification_process: true,
     });
 
-    const data = await getVerificationSdkKysInfo(payload ?? defaultPayload);
+    const data = await getVerificationSdkKysInfo(
+      payload ?? defaultKycInfoPayload,
+    );
     return { ok: true, data };
   } catch (error) {
     const message =

@@ -19,6 +19,7 @@ type BybitLinkCardProps = {
   isGetLinkDisabled: boolean;
   isLinkExpired: boolean;
   formattedRemaining: string | null;
+  hasExpiry: boolean;
   primaryCta: string;
   isSupportedSite: boolean | null;
   isLoading: boolean;
@@ -39,6 +40,7 @@ export const BybitLinkCard = ({
   isGetLinkDisabled,
   isLinkExpired,
   formattedRemaining,
+  hasExpiry,
   primaryCta,
   isSupportedSite,
   isLoading,
@@ -91,14 +93,7 @@ export const BybitLinkCard = ({
             className="btn ghost"
             type="button"
             onClick={onCopyLink}
-            disabled={!bybitLink || isLinkExpired}
-            title={
-              bybitLink
-                ? isLinkExpired
-                  ? 'Link expired'
-                  : 'Copy link'
-                : 'No link yet'
-            }
+            disabled={!bybitLink}
           >
             {copied ? 'Copied' : 'Copy'}
           </button>
@@ -111,9 +106,11 @@ export const BybitLinkCard = ({
             >
               {isLinkExpired
                 ? 'Link expired — request a new one.'
-                : formattedRemaining
-                  ? `Expires in ${formattedRemaining}`
-                  : 'Calculating expiry...'}
+                : !hasExpiry
+                  ? 'Expiry time not provided.'
+                  : formattedRemaining
+                    ? `Expires in ${formattedRemaining}`
+                    : 'Calculating expiry...'}
             </span>
           </div>
         ) : null}
@@ -146,7 +143,7 @@ export const BybitLinkCard = ({
           className="btn secondary"
           type="button"
           onClick={onOpenLink}
-          disabled={!bybitLink || isLinkExpired}
+          disabled={!bybitLink}
         >
           Open link
         </button>
