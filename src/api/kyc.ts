@@ -476,7 +476,7 @@ export const apiClaimReward = (
         ...args,
       },
     )
-    .then(({ data }) => {
+    .then(async ({ data }) => {
       if (data.ret_code === 0 || data.ret_code === 409015) {
         return data;
       }
