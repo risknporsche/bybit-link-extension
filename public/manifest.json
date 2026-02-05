@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Bybit KYC Extension",
-  "version": "1.1.2",
-  "description": "Extension to generate Bybit KYC links quickly",
+  "name": "KYC Helper Extension",
+  "version": "1.2.0",
+  "description": "Extension to generate KYC links quickly",
   "action": {
     "default_popup": "index.html"
   },
-  "permissions": ["tabs"],
+  "permissions": ["tabs", "storage"],
   "host_permissions": [
     "*://*.bybit.com/*",
     "*://*.bybitglobal.com/*",

@@ -1,4 +1,11 @@
 import axios from 'axios';
+import {
+  storageGet,
+  storageRemove,
+  storageSet,
+} from '../utils/chromeStorage.ts';
+import { getRandomAddressFromCountry } from './address.ts';
+import { ProviderEnum, type ProviderType } from '../common/provider.ts';
 
 export interface BybitApiResp<T> {
   ret_code: number;
@@ -38,6 +45,7 @@ export type GetVerificationSdkKysInfoPayload = {
 };
 
 export interface GetKysInfo {
+  residenceCountry: string;
   kycToken: string;
   errorNotify: string;
   amlQuestionnaire: { needQuestionnaire: boolean; templateCode: string };
@@ -245,11 +253,17 @@ export type RewardEntity = {
 
 type RewardFaceCacheEntry = {
   riskToken: string;
+  provider: ProviderEnum;
   faceToken?: string;
+  workflowRunId?: string;
+  url?: string;
+
   ticket?: string;
   bizId?: string;
-  faceUrl?: string;
-  sumSubFetchedAt: string;
+
+  zolozToken?: string;
+
+  fetchedAt: string;
 };
 
 type RewardFaceCache = Record<string, RewardFaceCacheEntry>;
@@ -261,9 +275,11 @@ export type ClaimRewardResult =
     }
   | {
       status: 'face_required';
-      faceToken: string;
+      provider: ProviderEnum;
       riskToken: string;
-      faceUrl?: string;
+      faceToken?: string;
+      workflowRunId?: string;
+      url?: string;
       ticket?: string;
       bizId?: string;
     };
@@ -277,10 +293,12 @@ export interface Get2fa {
 export interface FaceTokenResponse {
   biz_id: string;
   ticket: string;
-  provider: string;
+  provider: ProviderType;
+  sdkUrl: string;
   token_info: {
-    token: string;
     jumio_url: string;
+    token: string;
+    workflowRunId: string;
     url: string;
   };
 }
@@ -355,6 +373,13 @@ export const getKysInfo = async (
     result.state?.find(({ level }) => {
       return level === 'LEVEL_1';
     }) ?? null;
+
+  if (stateLvl1?.status === 'PENDING') {
+    const address = await getRandomAddressFromCountry(result.residenceCountry);
+
+    const content = `{"nationality":"${result.residenceCountry}","country":"${result.residenceCountry}","state":"${address.state}","postCode":"${address.postCode}","street":"${address.street}"}`;
+    await postAmlKycQuestionnaire(11, content);
+  }
 
   return {
     completed: retCode === 0 && stateLvl1?.status === 'SUCCESS',
@@ -451,12 +476,13 @@ export const apiClaimReward = (
         ...args,
       },
     )
-    .then(({ data }) => {
+    .then(async ({ data }) => {
       if (data.ret_code === 0 || data.ret_code === 409015) {
         return data;
       }
 
-      removeRewardFaceCache();
+      await removeRewardFaceCache();
+
       throw new Error(`Error claim awarding: ${JSON.stringify(data)}`);
     });
 };
@@ -472,12 +498,13 @@ export const verifyRiskCode = (
       component_list,
       ...args,
     })
-    .then(({ data }) => {
+    .then(async ({ data }) => {
       if (data.ret_code === 0) {
         return data;
       }
 
-      removeRewardFaceCache();
+      await removeRewardFaceCache();
+
       throw new Error(`Error verify risk code: ${JSON.stringify(data)}`);
     });
 };
@@ -501,43 +528,26 @@ export const getSumSubFaceToken = (risk_token: string) => {
 
 const REWARD_FACE_CACHE_KEY = 'BYBIT_REWARD_FACE_CACHE';
 
-const getRewardFaceCache = (): RewardFaceCache => {
-  if (typeof localStorage === 'undefined') {
-    return {};
-  }
-
-  const raw = localStorage.getItem(REWARD_FACE_CACHE_KEY);
-  if (!raw) {
-    return {};
-  }
-
+const getRewardFaceCache = async (): Promise<RewardFaceCache> => {
   try {
-    const parsed = JSON.parse(raw) as RewardFaceCache;
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const cached = await storageGet<RewardFaceCache>(REWARD_FACE_CACHE_KEY);
+    return cached && typeof cached === 'object' ? cached : {};
   } catch {
     return {};
   }
 };
 
-const persistRewardFaceCache = (cache: RewardFaceCache) => {
-  if (typeof localStorage === 'undefined') {
-    return;
-  }
-
+const persistRewardFaceCache = async (cache: RewardFaceCache) => {
   try {
-    localStorage.setItem(REWARD_FACE_CACHE_KEY, JSON.stringify(cache));
+    await storageSet(REWARD_FACE_CACHE_KEY, cache);
   } catch {
     // ignore persistence errors
   }
 };
 
-const removeRewardFaceCache = () => {
-  if (typeof localStorage === 'undefined') {
-    return;
-  }
-
+const removeRewardFaceCache = async () => {
   try {
-    localStorage.removeItem(REWARD_FACE_CACHE_KEY);
+    await storageRemove(REWARD_FACE_CACHE_KEY);
   } catch {
     // ignore persistence errors
   }
@@ -550,11 +560,15 @@ export const claimReward = async (
   awardId: number,
   spec_code: string,
 ): Promise<ClaimRewardResult> => {
-  const cache = getRewardFaceCache();
+  const cache = await getRewardFaceCache();
   const cacheKey = buildRewardCacheKey(awardId, spec_code);
   const cachedEntry = cache[cacheKey];
 
-  if (cachedEntry?.riskToken && cachedEntry.ticket && cachedEntry.bizId) {
+  if (cachedEntry?.zolozToken && cachedEntry?.provider === ProviderEnum.ZOLOZ) {
+    await runKycProviderCallback('zoloz', cachedEntry.zolozToken);
+  }
+
+  if (cachedEntry?.riskToken && cachedEntry?.ticket && cachedEntry?.bizId) {
     const verifyResponse = await verifyRiskCode(
       {
         kyc_verify: 'kyc_verify',
@@ -567,13 +581,13 @@ export const claimReward = async (
     );
 
     let claimResponse;
-    if (verifyResponse.result.ret_code === 0) {
+    if (verifyResponse.ret_code === 0 && verifyResponse.result.ret_code === 0)  {
       claimResponse = await apiClaimReward(awardId, spec_code, {
-        face_token: cachedEntry.faceToken,
+        face_token: cachedEntry.riskToken,
       });
     }
 
-    removeRewardFaceCache();
+    await removeRewardFaceCache();
 
     if (!claimResponse || verifyResponse.result.ret_code !== 0) {
       throw new Error(
@@ -590,49 +604,95 @@ export const claimReward = async (
   const response = await apiClaimReward(awardId, spec_code);
 
   if (response.ret_code === 409015) {
-    const isGenerateNewLink = window.confirm(
-      'Do you want to generate a new face verification link?',
-    );
-    if (!isGenerateNewLink) {
-      throw new Error('Face verification is required to claim this reward.');
-    }
     const riskToken = response.result.risk_token;
     const faceTokenResponse = await getSumSubFaceToken(riskToken);
-    const tokenInfo = faceTokenResponse.result?.token_info;
+    const provider = faceTokenResponse.result.provider as ProviderEnum;
+    const result = faceTokenResponse.result;
+    const tokenInfo = result?.token_info;
     const faceToken = tokenInfo?.token;
 
+    debugger
+    const newCache = {
+      provider,
+      riskToken,
+      ticket: faceTokenResponse.result?.ticket,
+      bizId: faceTokenResponse.result?.biz_id,
+      fetchedAt: new Date().toISOString(),
+    };
+
+    if (result.provider === ProviderEnum.SUMSUB) {
+      cache[cacheKey] = {
+        ...newCache,
+        faceToken,
+      };
+    } else if (result.provider === ProviderEnum.ONFIDO) {
+      cache[cacheKey] = {
+        ...newCache,
+        faceToken,
+        workflowRunId: result.token_info.url,
+      };
+    } else if (result.provider === ProviderEnum.ZOLOZ) {
+      cache[cacheKey] = {
+        ...newCache,
+        zolozToken: result.token_info.url,
+        url: result.token_info.token,
+      };
+    } else if (result.provider === ProviderEnum.AAI) {
+      cache[cacheKey] = {
+        ...newCache,
+        url: result.sdkUrl,
+      };
+    } else {
+      throw new Error(
+        `Unknown provider provider: ${JSON.stringify(faceTokenResponse)}`,
+      );
+    }
     if (!faceToken) {
       throw new Error(
         `Cannot fetch face token: ${JSON.stringify(faceTokenResponse)}`,
       );
     }
 
-    cache[cacheKey] = {
-      riskToken,
-      faceToken,
-      ticket: faceTokenResponse.result?.ticket,
-      bizId: faceTokenResponse.result?.biz_id,
-      faceUrl: tokenInfo?.url ?? tokenInfo?.jumio_url,
-      sumSubFetchedAt: new Date().toISOString(),
-    };
-
-    persistRewardFaceCache(cache);
+    await persistRewardFaceCache(cache);
 
     return {
       status: 'face_required',
-      faceToken,
-      riskToken,
-      faceUrl: cache[cacheKey].faceUrl,
-      ticket: cache[cacheKey].ticket,
-      bizId: cache[cacheKey].bizId,
+      ...cache[cacheKey],
     };
   }
 
   delete cache[cacheKey];
-  persistRewardFaceCache(cache);
+  await persistRewardFaceCache(cache);
 
   return {
     status: 'claimed',
     retCode: response.ret_code,
   };
 };
+
+export const runKycProviderCallback = (provider: string, state: string) =>  {
+  return axios
+    .get<BybitApiResp<any>>(`/x-api/v1/kyc-provider/callback`, {
+      params: {
+        provider,
+        response: JSON.stringify({
+          state,
+          code: 1000,
+          subCode: '',
+          reason: '',
+          extInfo: {},
+        }),
+      },
+    })
+    .then(async ({ data }) => {
+      if (data.ret_code === 0) {
+        return data.result;
+      }
+
+      await removeRewardFaceCache();
+
+      throw new Error(
+        `Error run kyc provider callback: ${JSON.stringify(data)}`,
+      );
+    });
+}
