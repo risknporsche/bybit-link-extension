@@ -15,6 +15,7 @@ import {
 } from './api/kyc.ts';
 import { storageGet, storageSet } from './utils/chromeStorage.ts';
 import { defaultKycInfoPayload } from './common/constants.ts';
+import { getUserProfile } from './api/profile.ts';
 
 type Message =
   | {
@@ -34,6 +35,9 @@ type Message =
         awardId: number;
         specCode: string;
       };
+    }
+  | {
+      type: 'GET_USER_ID';
     };
 
 type ContentScriptResponse<T> =
@@ -148,6 +152,17 @@ const handleClaimReward = async (
   }
 };
 
+const handleGetUserId = async (): Promise<ContentScriptResponse<string>> => {
+  try {
+    const data = await getUserProfile();
+    return { ok: true, data: data.id.toString() };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Failed to get user id';
+    return { ok: false, error: message };
+  }
+};
+
 chrome.runtime.onMessage.addListener(
   (message: Message, _sender, sendResponse) => {
     if (!message) {
@@ -197,6 +212,14 @@ chrome.runtime.onMessage.addListener(
           ...response,
           userId: localStorage.getItem('BYBIT_GA_UID'),
         });
+      });
+
+      return true;
+    }
+
+    if (message.type === 'GET_USER_ID') {
+      void handleGetUserId().then((response) => {
+        sendResponse(response);
       });
 
       return true;

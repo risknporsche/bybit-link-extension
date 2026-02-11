@@ -516,10 +516,15 @@ export const Popup = () => {
         throw new Error(response?.error ?? 'No response from content script');
       }
 
-      const userId = response.userId ?? '';
-      if (!userId) {
-        throw new Error('User id is missing');
+      const userIdResponse = await sendMessageToActiveTab<string>({
+        type: 'GET_USER_ID',
+      });
+
+      if (!userIdResponse?.ok || !userIdResponse.data) {
+        throw new Error('Failed to fetch user id');
       }
+
+      const userId = userIdResponse.data;
 
       const result = { ...response.data.result, userId };
 
@@ -807,7 +812,7 @@ export const Popup = () => {
   }, [faceRemainingMs, faceVerification]);
 
   useEffect(() => {
-    if(!faceVerification?.provider) {
+    if (!faceVerification?.provider) {
       setFaceRemainingMs(null);
       return;
     }
