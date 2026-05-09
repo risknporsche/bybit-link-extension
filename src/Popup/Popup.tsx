@@ -27,6 +27,8 @@ import {
 import { ProviderEnum } from '../common/provider.ts';
 import { getExpiredTimeByProvider } from '../utils/time.ts';
 
+const extensionVersion = chrome.runtime.getManifest().version;
+
 type ContentScriptResponse<T> =
   | { ok: true; data: T; userId?: string }
   | { ok: false; error: string };
@@ -693,7 +695,7 @@ export const Popup = () => {
             fetchedAt,
           };
           if (
-            [ProviderEnum.ZOLOZ, ProviderEnum.AAI].includes(result.provider)
+            ![ProviderEnum.SUMSUB, ProviderEnum.ONFIDO].includes(result.provider)
           ) {
             faceState = {
               ...faceState,
@@ -807,7 +809,7 @@ export const Popup = () => {
   }, [faceRemainingMs, faceVerification]);
 
   useEffect(() => {
-    if(!faceVerification?.provider) {
+    if (!faceVerification?.provider) {
       setFaceRemainingMs(null);
       return;
     }
@@ -1007,14 +1009,17 @@ export const Popup = () => {
           )}
         </div>
         <div className="header-actions">
-          <a
-            className="text-link text-link-compact"
-            href="https://t.me/risknporsche"
-            target="_blank"
-            rel="noreferrer"
-          >
-            @risknporsche
-          </a>
+          <div>
+            <a
+              className="text-link text-link-compact"
+              href="https://t.me/risknporsche"
+              target="_blank"
+              rel="noreferrer"
+            >
+              @risknporsche
+            </a>
+            <span className="pill-version">v{extensionVersion}</span>
+          </div>
           {mainTab === 'bybit' && (
             <span
               className={`pill ${isSupportedSite === false ? 'pill-danger' : 'pill-ok'}`}

@@ -611,7 +611,6 @@ export const claimReward = async (
     const tokenInfo = result?.token_info;
     const faceToken = tokenInfo?.token;
 
-    debugger
     const newCache = {
       provider,
       riskToken,
@@ -642,8 +641,17 @@ export const claimReward = async (
         ...newCache,
         url: result.sdkUrl,
       };
+    } else if (result.provider === ProviderEnum.JUMIO) {
+      cache[cacheKey] = {
+        ...newCache,
+        url: result.token_info.url,
+      };
     } else {
-      throw new Error(
+      cache[cacheKey] = {
+        ...newCache,
+        url: result.token_info.url,
+      };
+      console.log(
         `Unknown provider provider: ${JSON.stringify(faceTokenResponse)}`,
       );
     }
