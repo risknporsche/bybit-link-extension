@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KYC Helper Extension",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Extension to generate KYC links quickly",
   "action": {
     "default_popup": "index.html"

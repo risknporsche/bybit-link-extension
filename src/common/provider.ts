@@ -3,6 +3,7 @@ export enum ProviderEnum {
   ONFIDO = 'PROVIDER_ONFIDO',
   AAI = 'PROVIDER_AAI',
   ZOLOZ = 'PROVIDER_ZOLOZ',
+  JUMIO = 'PROVIDER_JUMIO_NEW',
 }
 
 export type ProviderType = ProviderEnum | string

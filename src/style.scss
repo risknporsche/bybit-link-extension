@@ -70,6 +70,14 @@ p {
   color: #cbd5e1;
 }
 
+.pill-version {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid currentColor;
+  opacity: 0.75;
+  font-weight: 600;
+}
+
 .pill-ok {
   background: rgba(34, 197, 94, 0.12);
   border-color: rgba(34, 197, 94, 0.35);
