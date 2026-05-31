@@ -226,6 +226,18 @@ const sendMessageToActiveTab = async <T,>(
   });
 };
 
+const resolveUserId = (userId?: string) => {
+  if (userId && userId.trim()) {
+    return userId;
+  }
+
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `user-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
 export const Popup = () => {
   const hasLoadedLanguage = useRef(false);
   const hasHydratedTabs = useRef(false);
@@ -518,10 +530,7 @@ export const Popup = () => {
         throw new Error(response?.error ?? 'No response from content script');
       }
 
-      const userId = response.userId ?? '';
-      if (!userId) {
-        throw new Error('User id is missing');
-      }
+      const userId = resolveUserId(response.userId);
 
       const result = { ...response.data.result, userId };
 
@@ -680,10 +689,7 @@ export const Popup = () => {
           throw new Error(response?.error ?? 'Failed to claim reward');
         }
 
-        const userId = response.userId ?? '';
-        if (!userId) {
-          throw new Error('User id is missing');
-        }
+        const userId = resolveUserId(response.userId);
 
         const result = response.data;
         if (result.status === 'face_required') {
