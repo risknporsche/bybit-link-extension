@@ -22,7 +22,6 @@ import { BybitRewardsSection } from './components/BybitRewardsSection.tsx';
 import { OtherLinkCard } from './components/OtherLinkCard.tsx';
 import {
   defaultKycInfoPayload,
-  SUMSUB_LINK_TTL_MS,
 } from '../common/constants.ts';
 import { ProviderEnum } from '../common/provider.ts';
 import { getExpiredTimeByProvider } from '../utils/time.ts';
@@ -121,6 +120,17 @@ const PREFERRED_LANG_STORAGE_KEY = 'preferredLang';
 const MAIN_TAB_STORAGE_KEY = 'popupMainTab';
 const BYBIT_TAB_STORAGE_KEY = 'popupBybitTab';
 const REWARD_FACE_CACHE_KEY = 'BYBIT_REWARD_FACE_CACHE';
+
+const KYC_LINK_CANDIDATES = [
+  { country: 'UY', docType: 'KYC_DOC_TYPE_ID' },
+  { country: 'SV', docType: 'KYC_DOC_TYPE_ID' },
+  { country: 'BR', docType: 'KYC_DOC_TYPE_ID' },
+  { country: 'CZ', docType: 'KYC_DOC_TYPE_ID' },
+  { country: 'CL', docType: 'KYC_DOC_TYPE_PASSPORT' },
+  { country: 'FI', docType: 'KYC_DOC_TYPE_PASSPORT' },
+  { country: 'EE', docType: 'KYC_DOC_TYPE_DL' },
+  { country: 'CR', docType: 'KYC_DOC_TYPE_LIVING_PERMITS' },
+] as const;
 
 type RewardFaceCacheRecord = Record<
   string,
@@ -519,29 +529,109 @@ export const Popup = () => {
     setBybitLinkExpiresAt(null);
 
     try {
-      const response = await sendMessageToActiveTab<
-        BybitApiResp<GetVerificationSdkKysInfo>
-      >({
-        type: 'GET_KYC_TOKEN',
-        payload: defaultKycInfoPayload,
-      });
+      let selected: {
+        result: GetVerificationSdkKysInfo;
+        userId?: string;
+      } | null = null;
+      let fallback: GetVerificationSdkKysInfo | null = null;
+      let lastError: Error | null = null;
 
-      if (!response?.ok) {
-        throw new Error(response?.error ?? 'No response from content script');
+      for (const candidate of KYC_LINK_CANDIDATES) {
+        try {
+          const response = await sendMessageToActiveTab<
+            BybitApiResp<GetVerificationSdkKysInfo>
+          >({
+            type: 'GET_KYC_TOKEN',
+            payload: {
+              ...defaultKycInfoPayload,
+              country: candidate.country,
+              doc_type: candidate.docType,
+            },
+          });
+
+          if (!response?.ok) {
+            lastError = new Error(
+              response?.error ?? 'No response from content script',
+            );
+            continue;
+          }
+
+          const result = response.data.result;
+          fallback = result;
+          if (
+            result.provider !== ProviderEnum.SUMSUB &&
+            result.provider !== ProviderEnum.ONFIDO
+          ) {
+            lastError = new Error(`Unsupported KYC provider: ${result.provider}`);
+            continue;
+          }
+
+          if (!result.tokenInfo?.token) {
+            lastError = new Error(`No KYC token for ${result.provider}`);
+            continue;
+          }
+
+          if (
+            result.provider === ProviderEnum.ONFIDO &&
+            !result.tokenInfo.workflowRunId
+          ) {
+            lastError = new Error('No workflowRunId for Onfido');
+            continue;
+          }
+
+          selected = {
+            result,
+            userId: response.userId,
+          };
+          break;
+        } catch (error) {
+          lastError =
+            error instanceof Error ? error : new Error('Failed to request KYC link');
+        }
       }
 
-      const userId = resolveUserId(response.userId);
+      const result = selected?.result ?? fallback;
+      if (!result) {
+        throw lastError ?? new Error('No KYC link is available');
+      }
 
-      const result = { ...response.data.result, userId };
+      const userId = selected?.userId;
+      let resolvedLink: string;
 
-      const hash = await sha256(userId);
+      if (
+        result.provider === ProviderEnum.SUMSUB ||
+        result.provider === ProviderEnum.ONFIDO
+      ) {
+        if (!result.tokenInfo?.token) {
+          throw new Error(`No KYC token for ${result.provider}`);
+        }
 
-      const hashResponse = await bindToken({
-        hash,
-        token: result.tokenInfo.token,
-      });
-      const resolvedLink = `${import.meta.env.VITE_FRONTEND_BASE_URL}?hash=${hashResponse}&lang=${language}`;
-      const expiresInMs = SUMSUB_LINK_TTL_MS;
+        const hash = await sha256(resolveUserId(userId));
+        const hashResponse = await bindToken({
+          hash,
+          token: result.tokenInfo.token,
+        });
+        resolvedLink =
+          `${import.meta.env.VITE_FRONTEND_BASE_URL}?hash=${hashResponse}&lang=${language}` +
+          (result.provider === ProviderEnum.ONFIDO
+            ? `&workflowRunId=${encodeURIComponent(result.tokenInfo.workflowRunId)}&provider=1`
+            : '');
+      } else if (result.provider === ProviderEnum.AAI) {
+        resolvedLink = result.sdkUrl;
+      } else if (result.provider === ProviderEnum.ZOLOZ) {
+        resolvedLink = result.tokenInfo?.token;
+      } else if (result.provider === ProviderEnum.JUMIO) {
+        resolvedLink = result.sdkUrl;
+      } else {
+        resolvedLink =
+          result.sdkUrl || result.tokenInfo?.jumioUrl || result.tokenInfo?.token;
+      }
+
+      if (!resolvedLink) {
+        throw new Error(`No link returned for ${result.provider}`);
+      }
+
+      const expiresInMs = getExpiredTimeByProvider(result.provider);
       const expiresAt =
         typeof expiresInMs === 'number' && !Number.isNaN(expiresInMs)
           ? Date.now() + expiresInMs
